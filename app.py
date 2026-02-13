@@ -679,28 +679,11 @@ def main():
         help="Upload CSV with order data"
     )
 
-    # Sample file buttons
-    col_sample1, col_sample2 = st.sidebar.columns(2)
-
-    with col_sample1:
-        if st.button("📋 Load Sample", use_container_width=True, help="Load the included sample orders CSV"):
-            import os
-            sample_path = "sample_orders.csv"
-            if os.path.exists(sample_path):
-                # Read the sample file and store it in session state
-                with open(sample_path, 'rb') as f:
-                    st.session_state.sample_file_content = f.read()
-                st.session_state.use_sample_file = True
-                st.session_state.use_random_sample = False
-                st.success("✅ Sample file loaded!")
-            else:
-                st.error("❌ Sample file not found")
-
-    with col_sample2:
-        if st.button("🎲 Random Sample", use_container_width=True, help="Generate random orders for testing"):
-            # Set flag to show parameter questions
-            st.session_state.show_random_sample_questions = True
-            st.rerun()
+    # Random sample button
+    if st.sidebar.button("🎲 Generate Random Sample", use_container_width=True, help="Generate random orders for testing", type="primary"):
+        # Set flag to show parameter questions
+        st.session_state.show_random_sample_questions = True
+        st.rerun()
 
     # Handle random sample generation with interactive form
     if st.session_state.get('show_random_sample_questions', False):
@@ -844,11 +827,11 @@ def main():
                 st.success(f"✅ Generated {num_orders} random orders! Scroll down and click Run to optimize.")
                 st.rerun()
 
-    # Use sample file if button was clicked
-    if (st.session_state.get('use_sample_file', False) or st.session_state.get('use_random_sample', False)) and uploaded_file is None:
+    # Use random sample if generated
+    if st.session_state.get('use_random_sample', False) and uploaded_file is None:
         from io import BytesIO
         uploaded_file = BytesIO(st.session_state.sample_file_content)
-        uploaded_file.name = "sample_orders.csv"
+        uploaded_file.name = "random_sample.csv"
 
     # Run buttons
     col1, col2 = st.sidebar.columns(2)
