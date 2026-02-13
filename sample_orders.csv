@@ -1,0 +1,36 @@
+orderID,customer_name,delivery_address,number_of_units,early_ok,delivery_window_start,delivery_window_end
+95001,"Alice Johnson","2400 Dix Hwy Lincoln Park MI 48146",8,Yes,09:00 AM,11:00 AM
+95002,"Ben Carter","2500 Dix Hwy Lincoln Park MI 48146",5,No,09:00 AM,11:00 AM
+95003,"Carla Gomez","2600 Dix Hwy Lincoln Park MI 48146",12,Yes,09:00 AM,11:00 AM
+95004,"David Lee","2700 Dix Hwy Lincoln Park MI 48146",18,Yes,09:00 AM,11:00 AM
+95005,"Emily Davis","2800 Dix Hwy Lincoln Park MI 48146",9,No,09:00 AM,11:00 AM
+
+95006,"Frank Moore","3600 Fort St Lincoln Park MI 48146",16,Yes,09:00 AM,11:00 AM
+95007,"Grace Kim","3700 Fort St Lincoln Park MI 48146",7,No,09:00 AM,11:00 AM
+95008,"Henry Patel","3800 Fort St Lincoln Park MI 48146",20,Yes,09:00 AM,11:00 AM
+95009,"Irene Nguyen","3900 Fort St Lincoln Park MI 48146",11,Yes,09:00 AM,11:00 AM
+95010,"Jack Wilson","4000 Fort St Lincoln Park MI 48146",14,No,09:00 AM,11:00 AM
+
+95011,"Karen Lopez","6178 Gulley St Taylor MI 48180",19,Yes,09:00 AM,11:00 AM
+95012,"Luis Rodriguez","6182 Gulley St Taylor MI 48180",13,No,09:00 AM,11:00 AM
+95013,"Megan Brooks","23720 Northline Rd Taylor MI 48180",22,Yes,09:00 AM,11:00 AM
+95014,"Noah Fisher","23900 Wick Rd Taylor MI 48180",10,Yes,09:00 AM,11:00 AM
+95015,"Olivia Harris","23800 Crisler St Taylor MI 48180",25,No,09:00 AM,11:00 AM
+
+95016,"Peter Young","23611 Crestview St Dearborn MI 48124",17,Yes,09:00 AM,11:00 AM
+95017,"Quinn Baker","23650 Park St Dearborn MI 48124",21,No,09:00 AM,11:00 AM
+95018,"Rita Allen","23700 Military St Dearborn MI 48124",15,Yes,09:00 AM,11:00 AM
+95019,"Sam Ortiz","23800 Morley Ave Dearborn MI 48124",24,Yes,09:00 AM,11:00 AM
+95020,"Tina Brown","23900 Cherry Hill Rd Dearborn MI 48124",9,No,09:00 AM,11:00 AM
+
+95021,"Uma Shah","14837 Arlington Ave Allen Park MI 48101",28,Yes,09:00 AM,11:00 AM
+95022,"Victor Ross","14900 Arlington Ave Allen Park MI 48101",6,No,09:00 AM,11:00 AM
+95023,"Wendy Clark","5200 Allen Rd Allen Park MI 48101",23,Yes,09:00 AM,11:00 AM
+95024,"Xavier Long","5300 Allen Rd Allen Park MI 48101",8,Yes,09:00 AM,11:00 AM
+95025,"Yara Medina","1900 Pelham Rd Allen Park MI 48101",30,No,09:00 AM,11:00 AM
+
+95026,"Zack Hill","13000 Dix Toledo Rd Southgate MI 48195",18,Yes,09:00 AM,11:00 AM
+95027,"Amy Flores","14000 Dix Toledo Rd Southgate MI 48195",7,No,09:00 AM,11:00 AM
+95028,"Brian Cole","2800 West Jefferson Ave Trenton MI 48183",26,Yes,09:00 AM,11:00 AM
+95029,"Chloe Evans","2900 West Jefferson Ave Trenton MI 48183",14,Yes,09:00 AM,11:00 AM
+95030,"Daniel Reed","3200 Biddle Ave Wyandotte MI 48192",20,No,09:00 AM,11:00 AM
