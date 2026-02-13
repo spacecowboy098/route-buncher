@@ -10,10 +10,40 @@ import googlemaps
 # Load environment variables from .env file
 load_dotenv()
 
+# Try to import streamlit for cloud deployment
+try:
+    import streamlit as st
+    HAS_STREAMLIT = True
+except ImportError:
+    HAS_STREAMLIT = False
+
+
+def get_secret(key: str, default: str = None) -> str:
+    """
+    Get a secret from Streamlit secrets (cloud) or environment variables (local).
+
+    Args:
+        key: Secret key name
+        default: Default value if not found
+
+    Returns:
+        Secret value or default
+    """
+    # Try Streamlit secrets first (for cloud deployment)
+    if HAS_STREAMLIT:
+        try:
+            return st.secrets.get(key, os.getenv(key, default))
+        except (AttributeError, FileNotFoundError):
+            # Streamlit secrets not configured, fall back to env vars
+            pass
+
+    # Fall back to environment variables (for local development)
+    return os.getenv(key, default)
+
 
 def get_google_maps_api_key() -> str:
     """
-    Retrieve the Google Maps API key from environment variables.
+    Retrieve the Google Maps API key from Streamlit secrets or environment variables.
 
     Returns:
         str: Google Maps API key
@@ -21,11 +51,11 @@ def get_google_maps_api_key() -> str:
     Raises:
         ValueError: If API key is not set
     """
-    api_key = os.getenv("GOOGLE_MAPS_API_KEY")
+    api_key = get_secret("GOOGLE_MAPS_API_KEY")
     if not api_key:
         raise ValueError(
-            "GOOGLE_MAPS_API_KEY not found in environment variables. "
-            "Please set it in your .env file."
+            "GOOGLE_MAPS_API_KEY not found. "
+            "Please set it in .env file (local) or Streamlit secrets (cloud)."
         )
     return api_key
 
@@ -43,12 +73,12 @@ def get_google_maps_client() -> googlemaps.Client:
 
 def get_default_depot() -> str:
     """
-    Get the default depot address from environment or use fallback.
+    Get the default depot address from Streamlit secrets, environment, or use fallback.
 
     Returns:
         str: Depot address
     """
-    return os.getenv("DEPOT_ADDRESS", "Meijer Plymouth MN")
+    return get_secret("DEPOT_ADDRESS", "Meijer Plymouth MN")
 
 
 def get_default_capacity() -> int:
@@ -58,7 +88,7 @@ def get_default_capacity() -> int:
     Returns:
         int: Vehicle capacity in units
     """
-    capacity_str = os.getenv("DEFAULT_VEHICLE_CAPACITY", "80")
+    capacity_str = get_secret("DEFAULT_VEHICLE_CAPACITY", "80")
     try:
         return int(capacity_str)
     except ValueError:
@@ -67,7 +97,7 @@ def get_default_capacity() -> int:
 
 def get_anthropic_api_key() -> str:
     """
-    Retrieve the Anthropic API key from environment variables.
+    Retrieve the Anthropic API key from Streamlit secrets or environment variables.
 
     Returns:
         str: Anthropic API key, or empty string if not set
@@ -75,4 +105,4 @@ def get_anthropic_api_key() -> str:
     Note:
         This is optional - chat assistant won't work without it
     """
-    return os.getenv("ANTHROPIC_API_KEY", "")
+    return get_secret("ANTHROPIC_API_KEY", "")
