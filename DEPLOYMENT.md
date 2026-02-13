@@ -42,6 +42,8 @@ GOOGLE_MAPS_API_KEY = "your-google-maps-api-key-here"
 ANTHROPIC_API_KEY = "your-anthropic-api-key-here"
 DEPOT_ADDRESS = "3710 Dix Hwy Lincoln Park, MI 48146"
 DEFAULT_VEHICLE_CAPACITY = "300"
+SERVICE_TIME_METHOD = "smart"
+FIXED_SERVICE_TIME = "3"
 APP_PASSWORD = "spaceCowboy"
 ```
 
@@ -50,6 +52,8 @@ APP_PASSWORD = "spaceCowboy"
 - Get your Anthropic API key from your `.env` file
 - Keep the DEPOT_ADDRESS, DEFAULT_VEHICLE_CAPACITY, and APP_PASSWORD as shown
 - Change APP_PASSWORD if you want a different password
+- SERVICE_TIME_METHOD: "smart" (variable by units) or "fixed" (same time per stop)
+- FIXED_SERVICE_TIME: Minutes per stop (only used if method is "fixed")
 
 5. Click **"Save"**
 6. The app will automatically restart with the secrets loaded

@@ -119,3 +119,28 @@ def get_app_password() -> str:
         If not set, defaults to "spaceCowboy"
     """
     return get_secret("APP_PASSWORD", "spaceCowboy")
+
+
+def get_default_service_time_method() -> str:
+    """
+    Get the default service time calculation method.
+
+    Returns:
+        str: "smart" for variable by units, "fixed" for fixed time per stop
+    """
+    method = get_secret("SERVICE_TIME_METHOD", "smart")
+    return method.lower()
+
+
+def get_default_fixed_service_time() -> int:
+    """
+    Get the default fixed service time in minutes.
+
+    Returns:
+        int: Fixed service time in minutes (default: 3)
+    """
+    time_str = get_secret("FIXED_SERVICE_TIME", "3")
+    try:
+        return int(time_str)
+    except ValueError:
+        return 3

@@ -618,6 +618,61 @@ def main():
         help="Override delivery window length from CSV (0 = use CSV value). Useful when actual window is shorter than planned."
     )
 
+    # Service time configuration
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("⏱️ Service Time")
+
+    # Get default method from config
+    default_method = config.get_default_service_time_method()
+    default_index = 0 if default_method == "smart" else 1
+
+    service_time_method = st.sidebar.radio(
+        "Service Time Method",
+        options=["Smart (Variable by Units)", "Fixed (Same for All Stops)"],
+        index=default_index,
+        help="Choose how to calculate service time at each stop"
+    )
+
+    if service_time_method == "Fixed (Same for All Stops)":
+        fixed_service_time = st.sidebar.number_input(
+            "Minutes per Stop",
+            min_value=1,
+            max_value=15,
+            value=config.get_default_fixed_service_time(),
+            step=1,
+            help="Fixed service time applied to every stop"
+        )
+    else:
+        # Smart service time - show info about the logic
+        with st.sidebar.expander("ℹ️ How Smart Service Time Works"):
+            st.markdown("""
+            **Smart service time** calculates time based on order size using real operational data:
+
+            **Formula**: `time = 1.6 + (units^1.3) × 0.045`
+
+            **Examples**:
+            - 2-10 units → 2-3 minutes *(small orders)*
+            - 18-25 units → 3-5 minutes *(typical orders)*
+            - 30-40 units → 5-7 minutes *(large orders)*
+
+            **Why it works**:
+            - Larger orders take disproportionately more time
+            - Reflects actual unloading patterns
+            - Power curve (^1.3) captures efficiency loss at scale
+            - Capped at 7 minutes maximum
+
+            **When to use**:
+            - ✅ Variable order sizes (mix of small and large)
+            - ✅ Want realistic time estimates
+            - ✅ Typical grocery/retail delivery
+
+            **When to use Fixed instead**:
+            - Orders are all similar size
+            - You have exact timing data
+            - Simplicity preferred over accuracy
+            """)
+        fixed_service_time = None  # Not used in smart mode
+
     # File upload
     st.sidebar.header("Upload Orders")
     uploaded_file = st.sidebar.file_uploader(
@@ -834,8 +889,13 @@ def main():
                 demands = [0] + [o["units"] for o in valid_orders]
 
                 # Build service times array: depot has 0 service time
-                # Service time is unloading time per stop (2-7 minutes, non-linear with units)
-                service_times = [0] + [optimizer.service_time_for_units(o["units"]) for o in valid_orders]
+                # Service time is unloading time per stop
+                if service_time_method == "Fixed (Same for All Stops)":
+                    # Fixed service time for all stops
+                    service_times = [0] + [fixed_service_time for o in valid_orders]
+                else:
+                    # Smart service time: variable by units (2-7 minutes, non-linear with units)
+                    service_times = [0] + [optimizer.service_time_for_units(o["units"]) for o in valid_orders]
 
                 # Run THREE optimization cuts with different strategies
                 optimizations = {}
@@ -1283,6 +1343,12 @@ def main():
                 progress_text.empty()
 
                 st.success("✅ Optimization complete!")
+
+                # Show service time method info
+                if service_time_method == "Fixed (Same for All Stops)":
+                    st.info(f"⏱️ Using **Fixed Service Time**: {fixed_service_time} minutes per stop")
+                else:
+                    st.info("⏱️ Using **Smart Service Time**: Variable by order size (2-7 min based on units)")
 
             # Display results (either from fresh optimization or from session state)
             if "optimization_results" in st.session_state and st.session_state.optimization_results:
