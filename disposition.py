@@ -134,19 +134,18 @@ def classify_orders(
         # Calculate score
         score = calculate_order_score("KEEP", avg_distance, order["units"], depot_distance)
 
-        keep_dict = {
-            "order_id": order["order_id"],
-            "customer_name": order["customer_name"],
-            "delivery_address": order["delivery_address"],
-            "units": order["units"],
-            "early_delivery_ok": order["early_delivery_ok"],
+        # Start with all original order fields to preserve CSV columns
+        keep_dict = dict(order)  # Copy all fields from original order
+
+        # Add/override with optimizer-specific fields
+        keep_dict.update({
             "category": "KEEP",
             "reason": "Included in optimized route",
             "estimated_arrival": kept_order["arrival_min"],
             "sequence_index": kept_order["sequence_index"],
             "node": kept_order["node"],  # Include node for map visualization
             "optimal_score": score
-        }
+        })
         keep.append(keep_dict)
 
     # Process DROPPED orders
@@ -169,40 +168,38 @@ def classify_orders(
         # Calculate depot distance for scoring
         depot_distance = time_matrix[0][node]
 
-        base_dict = {
-            "order_id": order["order_id"],
-            "customer_name": order["customer_name"],
-            "delivery_address": order["delivery_address"],
-            "units": order["units"],
-            "early_delivery_ok": order["early_delivery_ok"]
-        }
+        # Copy all fields from original order to preserve CSV columns
+        base_dict = dict(order)
 
         if order["early_delivery_ok"] and avg_distance_to_cluster < 10:
             # EARLY_DELIVERY: Close to cluster and customer allows early delivery
             score = calculate_order_score("EARLY_DELIVERY", avg_distance_to_cluster, order["units"], depot_distance)
-            early.append({
-                **base_dict,
+            early_dict = dict(base_dict)
+            early_dict.update({
                 "category": "EARLY_DELIVERY",
                 "reason": "Close to current cluster (<10 min) and marked early_ok",
                 "optimal_score": score
             })
+            early.append(early_dict)
         elif avg_distance_to_cluster < 20:
             # RESCHEDULE: Moderately close, better fit in different window
             score = calculate_order_score("RESCHEDULE", avg_distance_to_cluster, order["units"], depot_distance)
-            reschedule.append({
-                **base_dict,
+            resc_dict = dict(base_dict)
+            resc_dict.update({
                 "category": "RESCHEDULE",
                 "reason": "Moderately close (<20 min); better fit in a different window",
                 "optimal_score": score
             })
+            reschedule.append(resc_dict)
         else:
             # CANCEL: Geographically isolated
             score = calculate_order_score("CANCEL", avg_distance_to_cluster, order["units"], depot_distance)
-            cancel.append({
-                **base_dict,
+            cancel_dict = dict(base_dict)
+            cancel_dict.update({
                 "category": "CANCEL",
                 "reason": "Geographically isolated (>=20 min from cluster)",
                 "optimal_score": score
             })
+            cancel.append(cancel_dict)
 
     return keep, early, reschedule, cancel

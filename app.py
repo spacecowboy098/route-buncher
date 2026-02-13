@@ -23,6 +23,27 @@ def format_time_minutes(minutes: int) -> str:
     return f"{hours:02d}:{mins:02d}"
 
 
+def extract_all_csv_fields(order: Dict) -> Dict:
+    """
+    Extract all original CSV fields from an order object.
+    Returns a dict with all CSV columns that should be displayed.
+    """
+    # Fields to exclude from display (internal optimizer fields and already-shown core fields)
+    exclude_fields = {
+        "node", "sequence_index", "estimated_arrival", "optimal_score",
+        "ai_explanation", "reason", "early_delivery_ok", "delivery_window_start",
+        "delivery_window_end", "order_id", "customer_name", "delivery_address", "units"
+    }
+
+    # Extract all fields that aren't internal or already displayed
+    csv_fields = {}
+    for key, value in order.items():
+        if key not in exclude_fields and value is not None:
+            csv_fields[key] = value
+
+    return csv_fields
+
+
 def create_map_visualization(keep, cancel, early, reschedule, geocoded, depot_address, valid_orders, addresses, service_times):
     """Create an interactive Google Maps-style map using Folium."""
     try:
@@ -429,16 +450,24 @@ def display_optimization_results(keep, early, reschedule, cancel, kept, service_
     if keep:
         keep_data = []
         for k in sorted(keep, key=lambda x: x["sequence_index"]):
+            # Start with key display fields
             row = {
                 "Seq": k["sequence_index"] + 1,
                 "externalOrderId": k["order_id"],
                 "customerID": k["customer_name"],
                 "address": k["delivery_address"],
-                "numberOfUnits": k["units"],
-                "Score": f"{k.get('optimal_score', 0)}/100",
-                "Est. Service Time": f"{service_times[k['node']]} min" if service_times and k['node'] < len(service_times) else "N/A",
-                "Est. Arrival": format_time_minutes(k["estimated_arrival"])
+                "numberOfUnits": k["units"]
             }
+
+            # Add all original CSV fields
+            csv_fields = extract_all_csv_fields(k)
+            row.update(csv_fields)
+
+            # Add optimizer-computed fields at the end
+            row["Score"] = f"{k.get('optimal_score', 0)}/100"
+            row["Est. Service Time"] = f"{service_times[k['node']]} min" if service_times and k['node'] < len(service_times) else "N/A"
+            row["Est. Arrival"] = format_time_minutes(k["estimated_arrival"])
+
             if show_ai_explanations:
                 row["AI Explanation"] = k.get("ai_explanation", k.get("reason", ""))
             else:
@@ -455,13 +484,21 @@ def display_optimization_results(keep, early, reschedule, cancel, kept, service_
     if early:
         early_data = []
         for e in early:
+            # Start with key display fields
             row = {
                 "externalOrderId": e["order_id"],
                 "customerID": e["customer_name"],
                 "address": e["delivery_address"],
-                "numberOfUnits": e["units"],
-                "Score": f"{e.get('optimal_score', 0)}/100"
+                "numberOfUnits": e["units"]
             }
+
+            # Add all original CSV fields
+            csv_fields = extract_all_csv_fields(e)
+            row.update(csv_fields)
+
+            # Add optimizer-computed fields at the end
+            row["Score"] = f"{e.get('optimal_score', 0)}/100"
+
             if show_ai_explanations:
                 row["AI Explanation"] = e.get("ai_explanation", e.get("reason", ""))
             else:
@@ -478,14 +515,22 @@ def display_optimization_results(keep, early, reschedule, cancel, kept, service_
     excluded_orders = []
 
     for r in reschedule:
+        # Start with key display fields
         row = {
             "Action": "📅 RESCHEDULE",
             "externalOrderId": r["order_id"],
             "customerID": r["customer_name"],
             "address": r["delivery_address"],
-            "numberOfUnits": r["units"],
-            "Score": f"{r.get('optimal_score', 0)}/100"
+            "numberOfUnits": r["units"]
         }
+
+        # Add all original CSV fields
+        csv_fields = extract_all_csv_fields(r)
+        row.update(csv_fields)
+
+        # Add optimizer-computed fields at the end
+        row["Score"] = f"{r.get('optimal_score', 0)}/100"
+
         if show_ai_explanations:
             row["AI Explanation"] = r.get("ai_explanation", r.get("reason", ""))
         else:
@@ -493,14 +538,22 @@ def display_optimization_results(keep, early, reschedule, cancel, kept, service_
         excluded_orders.append(row)
 
     for c in cancel:
+        # Start with key display fields
         row = {
             "Action": "❌ CANCEL",
             "externalOrderId": c["order_id"],
             "customerID": c["customer_name"],
             "address": c["delivery_address"],
-            "numberOfUnits": c["units"],
-            "Score": f"{c.get('optimal_score', 0)}/100"
+            "numberOfUnits": c["units"]
         }
+
+        # Add all original CSV fields
+        csv_fields = extract_all_csv_fields(c)
+        row.update(csv_fields)
+
+        # Add optimizer-computed fields at the end
+        row["Score"] = f"{c.get('optimal_score', 0)}/100"
+
         if show_ai_explanations:
             row["AI Explanation"] = c.get("ai_explanation", c.get("reason", ""))
         else:
@@ -683,7 +736,7 @@ def main():
     status_filter = st.sidebar.multiselect(
         "Filter by Order Status",
         options=["delivered", "cancelled"],
-        default=["delivered"],
+        default=["delivered", "cancelled"],
         help="Select which order statuses to include (used for audit purposes)"
     )
 
@@ -1190,6 +1243,7 @@ def main():
             mode = st.radio(
                 "Choose optimization mode:",
                 ["One window", "Full day"],
+                index=1,  # Default to "Full day"
                 help="One window: optimize a single delivery window. Full day: allocate orders across multiple windows."
             )
 
@@ -1232,9 +1286,15 @@ def main():
                     st.metric("Vehicle capacity", vehicle_capacity)
 
             else:  # Full day mode
-                st.markdown("### 🚛 Configure Capacity Per Window")
+                # Show window labels in header
+                window_summary = " | ".join([f"**{label}**" for label in window_labels_list])
+                st.markdown(f"### 🚛 Configure Capacity Per Window\n{window_summary}")
 
-                # Create capacity inputs for each window
+                # Build capacity configuration table with editable times
+                from datetime import datetime, time as dt_time
+                capacity_data = []
+                window_times_map = {}  # Store original window times for matching orders later
+
                 for i, (win_start, win_end) in enumerate(sorted_windows):
                     label = window_labels_list[i]
                     window_orders = [o for o in valid_orders if
@@ -1242,28 +1302,149 @@ def main():
                                    o['delivery_window_end'] == win_end]
                     total_units = sum(o['units'] for o in window_orders)
 
-                    with st.expander(f"**{label}** — {len(window_orders)} orders, {total_units} units", expanded=True):
-                        capacity = st.number_input(
-                            "Vehicle capacity (units)",
-                            min_value=0,
-                            value=300,
-                            step=10,
-                            key=f"capacity_{i}",
-                            help=f"Maximum units for {label} window"
-                        )
-                        window_capacities[label] = capacity
+                    # Calculate window length in minutes
+                    start_minutes = win_start.hour * 60 + win_start.minute
+                    end_minutes = win_end.hour * 60 + win_end.minute
+                    window_length = end_minutes - start_minutes
 
-                        # Show capacity vs demand
-                        if total_units > capacity:
-                            st.warning(f"⚠️ Demand ({total_units} units) exceeds capacity ({capacity} units). {total_units - capacity} units will need reallocation.")
+                    utilization = round((total_units / 300) * 100, 1) if 300 > 0 else 0
+                    status = "🟢" if total_units <= 300 else "🔴"
+
+                    capacity_data.append({
+                        "Window": label,  # Keep for internal use but hide in display
+                        "Start": win_start,  # Keep as time object for TimeColumn
+                        "End": win_end,  # Keep as time object for TimeColumn
+                        "Length (min)": window_length,
+                        "Orders": len(window_orders),
+                        "Units": total_units,
+                        "Capacity": 300,  # Default capacity
+                        "Utilization %": utilization,
+                        "Status": status
+                    })
+
+                    # Store mapping for later
+                    window_times_map[label] = (win_start, win_end)
+
+                # Create editable dataframe
+                capacity_df = pd.DataFrame(capacity_data)
+
+                edited_df = st.data_editor(
+                    capacity_df,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Window": None,  # Hide this column
+                        "Start": st.column_config.TimeColumn(
+                            "Start",
+                            format="hh:mm a",
+                            width="small",
+                            help="Edit window start time"
+                        ),
+                        "End": st.column_config.TimeColumn(
+                            "End",
+                            format="hh:mm a",
+                            width="small",
+                            help="Edit window end time"
+                        ),
+                        "Length (min)": st.column_config.NumberColumn(
+                            "Length (min)",
+                            disabled=True,
+                            width="small",
+                            help="Calculated from Start/End"
+                        ),
+                        "Orders": st.column_config.NumberColumn(
+                            "Orders",
+                            disabled=True,
+                            width="small"
+                        ),
+                        "Units": st.column_config.NumberColumn(
+                            "Units",
+                            disabled=True,
+                            width="small",
+                            help="Total units"
+                        ),
+                        "Capacity": st.column_config.NumberColumn(
+                            "Capacity",
+                            min_value=0,
+                            max_value=1000,
+                            step=10,
+                            width="small",
+                            help="Edit vehicle capacity (units)"
+                        ),
+                        "Utilization %": st.column_config.NumberColumn(
+                            "Util %",
+                            disabled=True,
+                            width="small",
+                            help="Capacity utilization percentage"
+                        ),
+                        "Status": st.column_config.TextColumn(
+                            "Status",
+                            disabled=True,
+                            width="small",
+                            help="🟢 = Sufficient | 🔴 = Over capacity"
+                        )
+                    },
+                    key="capacity_editor"
+                )
+
+                # Update window_capacities dict and recalculate based on edits
+                updated_windows = []  # Store updated window times
+                for idx, row in edited_df.iterrows():
+                    label = row["Window"]
+                    capacity = row["Capacity"]
+                    units = row["Units"]
+                    window_capacities[label] = capacity
+
+                    # Parse edited times and calculate length
+                    try:
+                        if isinstance(row["Start"], str):
+                            start_time = datetime.strptime(row["Start"], "%I:%M %p").time()
                         else:
-                            st.success(f"✅ Capacity sufficient ({capacity - total_units} units available)")
+                            start_time = row["Start"]
+
+                        if isinstance(row["End"], str):
+                            end_time = datetime.strptime(row["End"], "%I:%M %p").time()
+                        else:
+                            end_time = row["End"]
+
+                        # Calculate window length
+                        start_minutes = start_time.hour * 60 + start_time.minute
+                        end_minutes = end_time.hour * 60 + end_time.minute
+                        window_length = end_minutes - start_minutes
+
+                        # Update the length column
+                        edited_df.at[idx, "Length (min)"] = window_length
+
+                        # Store updated window times
+                        updated_windows.append((label, start_time, end_time))
+
+                    except (ValueError, AttributeError):
+                        # If parsing fails, use original times
+                        orig_start, orig_end = window_times_map[label]
+                        updated_windows.append((label, orig_start, orig_end))
+
+                    # Recalculate utilization and status based on edited capacity
+                    utilization = round((units / capacity) * 100, 1) if capacity > 0 else 0
+                    status = "🟢" if units <= capacity else "🔴"
+                    edited_df.at[idx, "Utilization %"] = utilization
+                    edited_df.at[idx, "Status"] = status
+
+                # Store updated window times in session state for use in optimization
+                st.session_state['updated_window_times'] = {label: (start, end) for label, start, end in updated_windows}
+
+                # Show summary of capacity issues
+                insufficient_windows = edited_df[edited_df["Units"] > edited_df["Capacity"]]
+                if not insufficient_windows.empty:
+                    total_overflow = (insufficient_windows["Units"] - insufficient_windows["Capacity"]).sum()
+                    st.warning(f"⚠️ {len(insufficient_windows)} window(s) with insufficient capacity. Total overflow: {int(total_overflow)} units will need reallocation.")
+                else:
+                    st.success("✅ All windows have sufficient capacity")
 
                 # Allocation strategy options
                 st.markdown("### ⚙️ Allocation Strategy")
                 honor_priority = st.checkbox(
                     "Honor priority customers (power/vip stay in original window)",
-                    value=True,
+                    value=False,
                     help="When checked: Priority customers locked to original window (Pass 1). Uncheck for 'truly max orders' view that ignores customer priority."
                 )
 
@@ -2281,9 +2462,16 @@ def main():
                                             "externalOrderId": str(k.get("order_id", "")),
                                             "customerID": str(k.get("customer_name", "")),
                                             "address": str(k.get("delivery_address", "")),
-                                            "numberOfUnits": int(k.get("units", 0)),
-                                            "Est. Service Time": f"{service_time} min"
+                                            "numberOfUnits": int(k.get("units", 0))
                                         }
+
+                                        # Add all original CSV fields
+                                        csv_fields = extract_all_csv_fields(k)
+                                        row.update(csv_fields)
+
+                                        # Add service time at the end
+                                        row["Est. Service Time"] = f"{service_time} min"
+
                                         route_table_data.append(row)
                                     except (ValueError, TypeError, KeyError, IndexError):
                                         continue
@@ -2303,6 +2491,21 @@ def main():
                     # Import allocator
                     from allocator import allocate_orders_across_windows, window_label
 
+                    # Use updated window times if available (from editable table)
+                    if 'updated_window_times' in st.session_state:
+                        # Build windows list from updated times
+                        allocation_windows = []
+                        for label in window_labels_list:
+                            if label in st.session_state['updated_window_times']:
+                                start_time, end_time = st.session_state['updated_window_times'][label]
+                                allocation_windows.append((start_time, end_time))
+                            else:
+                                # Fallback to original window
+                                idx = window_labels_list.index(label)
+                                allocation_windows.append(sorted_windows[idx])
+                    else:
+                        allocation_windows = sorted_windows
+
                     # Run allocator
                     if honor_priority:
                         st.info("📊 Running cross-window allocation (honoring priority customers)...")
@@ -2311,7 +2514,7 @@ def main():
 
                     allocation_result = allocate_orders_across_windows(
                         orders=valid_orders,
-                        windows=sorted_windows,
+                        windows=allocation_windows,
                         window_capacities=window_capacities,
                         honor_priority=honor_priority,
                         cancel_threshold=cancel_threshold,
@@ -2337,7 +2540,7 @@ def main():
 
                     window_results = {}
 
-                    for i, (win_start, win_end) in enumerate(sorted_windows):
+                    for i, (win_start, win_end) in enumerate(allocation_windows):
                         win_label = window_labels_list[i]
                         win_orders = allocation_result.orders_by_window.get(win_label, [])
 
@@ -2347,7 +2550,7 @@ def main():
                             continue
 
                         with st.expander(f"**{win_label}** — {len(win_orders)} orders", expanded=True):
-                            # Compute window duration
+                            # Compute window duration (using edited times if available)
                             from allocator import window_duration_minutes
                             win_duration = window_duration_minutes(win_start, win_end)
 
@@ -2392,14 +2595,16 @@ def main():
                                 time_matrix=win_time_matrix
                             )
 
-                            # Store results
+                            # Store results (including geocoded data for global map)
                             window_results[win_label] = {
                                 'keep': keep,
                                 'early': early,
                                 'reschedule': reschedule,
                                 'cancel': cancel,
                                 'orders_kept': len(keep),
-                                'total_units': sum(o['units'] for o in keep)
+                                'total_units': sum(o['units'] for o in keep),
+                                'geocoded': win_geocoded,  # Store for global map
+                                'addresses': win_addresses  # Store for reference
                             }
 
                             # Display results
@@ -2408,47 +2613,228 @@ def main():
                             # Show KEEP orders
                             if keep:
                                 st.markdown("#### ✅ KEEP (On Route)")
-                                keep_df = pd.DataFrame([{
-                                    "Seq": k["sequence_index"] + 1,
-                                    "externalOrderId": k["order_id"],
-                                    "customerID": k["customer_name"],
-                                    "address": k["delivery_address"],
-                                    "numberOfUnits": k["units"]
-                                } for k in sorted(keep, key=lambda x: x["sequence_index"])])
+                                keep_data = []
+                                for k in sorted(keep, key=lambda x: x["sequence_index"]):
+                                    row = {
+                                        "Seq": k["sequence_index"] + 1,
+                                        "externalOrderId": k["order_id"],
+                                        "customerID": k["customer_name"],
+                                        "address": k["delivery_address"],
+                                        "numberOfUnits": k["units"]
+                                    }
+                                    csv_fields = extract_all_csv_fields(k)
+                                    row.update(csv_fields)
+                                    keep_data.append(row)
+                                keep_df = pd.DataFrame(keep_data)
                                 st.dataframe(keep_df, use_container_width=True)
 
                             # Show EARLY orders
                             if early:
                                 st.markdown("#### ⏰ EARLY DELIVERY")
-                                early_df = pd.DataFrame([{
-                                    "externalOrderId": e["order_id"],
-                                    "customerID": e["customer_name"],
-                                    "address": e["delivery_address"],
-                                    "numberOfUnits": e["units"]
-                                } for e in early])
+                                early_data = []
+                                for e in early:
+                                    row = {
+                                        "externalOrderId": e["order_id"],
+                                        "customerID": e["customer_name"],
+                                        "address": e["delivery_address"],
+                                        "numberOfUnits": e["units"]
+                                    }
+                                    csv_fields = extract_all_csv_fields(e)
+                                    row.update(csv_fields)
+                                    early_data.append(row)
+                                early_df = pd.DataFrame(early_data)
                                 st.dataframe(early_df, use_container_width=True)
 
                             # Show RESCHEDULE orders
                             if reschedule:
                                 st.markdown("#### 📅 RESCHEDULE")
-                                resc_df = pd.DataFrame([{
-                                    "externalOrderId": r["order_id"],
-                                    "customerID": r["customer_name"],
-                                    "address": r["delivery_address"],
-                                    "numberOfUnits": r["units"]
-                                } for r in reschedule])
+                                resc_data = []
+                                for r in reschedule:
+                                    row = {
+                                        "externalOrderId": r["order_id"],
+                                        "customerID": r["customer_name"],
+                                        "address": r["delivery_address"],
+                                        "numberOfUnits": r["units"]
+                                    }
+                                    csv_fields = extract_all_csv_fields(r)
+                                    row.update(csv_fields)
+                                    resc_data.append(row)
+                                resc_df = pd.DataFrame(resc_data)
                                 st.dataframe(resc_df, use_container_width=True)
 
                             # Show CANCEL orders
                             if cancel:
                                 st.markdown("#### ❌ CANCEL")
-                                cancel_df = pd.DataFrame([{
-                                    "externalOrderId": c["order_id"],
-                                    "customerID": c["customer_name"],
-                                    "address": c["delivery_address"],
-                                    "numberOfUnits": c["units"]
-                                } for c in cancel])
+                                cancel_data = []
+                                for c in cancel:
+                                    row = {
+                                        "externalOrderId": c["order_id"],
+                                        "customerID": c["customer_name"],
+                                        "address": c["delivery_address"],
+                                        "numberOfUnits": c["units"]
+                                    }
+                                    csv_fields = extract_all_csv_fields(c)
+                                    row.update(csv_fields)
+                                    cancel_data.append(row)
+                                cancel_df = pd.DataFrame(cancel_data)
                                 st.dataframe(cancel_df, use_container_width=True)
+
+                    st.markdown("---")
+
+                    # Global Summary Map
+                    st.markdown("### 🗺️ Global Route Summary Map")
+                    st.markdown("All routes displayed together with color-coded windows")
+
+                    # Debug: Show number of window results
+                    st.info(f"🔍 Debug: Found {len(window_results)} window(s) with results")
+
+                    try:
+                        import folium
+                        from folium import plugins
+
+                        # Get depot coordinates from first window's geocoded data
+                        if not window_results:
+                            st.warning("No routes to display on map - window_results is empty")
+                        else:
+                            st.info(f"✅ Processing {len(window_results)} windows for map visualization")
+                            first_window = list(window_results.values())[0]
+
+                            # Debug: Check if geocoded data exists
+                            if 'geocoded' not in first_window:
+                                st.error("❌ No 'geocoded' key in window results")
+                            else:
+                                st.success(f"✅ Found geocoded data with {len(first_window['geocoded'])} entries")
+
+                            depot_geo = first_window['geocoded'][0] if first_window.get('geocoded') else None
+
+                            if depot_geo is None:
+                                st.warning("⚠️ Depot location is None. Cannot display map.")
+                            elif depot_geo.get("lat") is None:
+                                st.warning(f"⚠️ Depot location has no latitude. Data: {depot_geo}")
+                            else:
+                                st.success(f"✅ Depot located at ({depot_geo['lat']}, {depot_geo['lng']})")
+                                # Define distinct colors for each window
+                                route_colors = [
+                                    '#FF0000',  # Red
+                                    '#0000FF',  # Blue
+                                    '#00FF00',  # Green
+                                    '#FF00FF',  # Magenta
+                                    '#FFA500',  # Orange
+                                    '#800080',  # Purple
+                                    '#00FFFF',  # Cyan
+                                    '#FFD700',  # Gold
+                                ]
+
+                                # Calculate map center from all routes
+                                all_lats = [depot_geo["lat"]]
+                                all_lons = [depot_geo["lng"]]
+
+                                for win_label, result in window_results.items():
+                                    win_geocoded = result.get('geocoded', [])
+                                    for order in result['keep']:
+                                        if 'node' in order:
+                                            node_idx = order['node']
+                                            if 0 <= node_idx < len(win_geocoded):
+                                                geo = win_geocoded[node_idx]
+                                                if geo.get("lat") is not None:
+                                                    all_lats.append(geo["lat"])
+                                                    all_lons.append(geo["lng"])
+
+                                if len(all_lats) > 1:
+                                    center_lat = sum(all_lats) / len(all_lats)
+                                    center_lon = sum(all_lons) / len(all_lons)
+
+                                    # Create map
+                                    global_map = folium.Map(
+                                        location=[center_lat, center_lon],
+                                        zoom_start=11,
+                                        tiles='OpenStreetMap'
+                                    )
+
+                                    # Add depot marker
+                                    folium.Marker(
+                                        location=[depot_geo["lat"], depot_geo["lng"]],
+                                        popup=f"<b>Depot</b><br>{depot_address}",
+                                        icon=folium.Icon(color='blue', icon='home', prefix='fa'),
+                                        tooltip="Fulfillment Location"
+                                    ).add_to(global_map)
+
+                                    # Plot each window's route with different color
+                                    for idx, (win_label, result) in enumerate(window_results.items()):
+                                        color = route_colors[idx % len(route_colors)]
+                                        keep_orders = result['keep']
+                                        win_geocoded_data = result.get('geocoded', [])
+
+                                        if keep_orders and win_geocoded_data:
+                                            # Sort by sequence
+                                            sorted_orders = sorted(keep_orders, key=lambda x: x.get('sequence_index', 0))
+
+                                            # Add markers for each stop
+                                            for i, order in enumerate(sorted_orders):
+                                                if 'node' in order:
+                                                    node_idx = order['node']
+                                                    if 0 <= node_idx < len(win_geocoded_data):
+                                                        geo = win_geocoded_data[node_idx]
+                                                        if geo.get("lat") is not None:
+                                                            popup_html = f"""
+                                                            <b>Window: {win_label}</b><br>
+                                                            Stop #{i+1}<br>
+                                                            Order: {order.get('order_id', 'N/A')}<br>
+                                                            Customer: {order.get('customer_name', 'N/A')}<br>
+                                                            Units: {order.get('units', 'N/A')}
+                                                            """
+
+                                                            folium.CircleMarker(
+                                                                location=[geo["lat"], geo["lng"]],
+                                                                radius=8,
+                                                                popup=folium.Popup(popup_html, max_width=300),
+                                                                color=color,
+                                                                fill=True,
+                                                                fillColor=color,
+                                                                fillOpacity=0.7,
+                                                                weight=2,
+                                                                tooltip=f"{win_label}: Stop {i+1}"
+                                                            ).add_to(global_map)
+
+                                            # Draw route lines connecting stops
+                                            route_coords = [[depot_geo["lat"], depot_geo["lng"]]]  # Start at depot
+                                            for order in sorted_orders:
+                                                if 'node' in order:
+                                                    node_idx = order['node']
+                                                    if 0 <= node_idx < len(win_geocoded_data):
+                                                        geo = win_geocoded_data[node_idx]
+                                                        if geo.get("lat") is not None:
+                                                            route_coords.append([geo["lat"], geo["lng"]])
+                                            route_coords.append([depot_geo["lat"], depot_geo["lng"]])  # Return to depot
+
+                                            # Add route line
+                                            folium.PolyLine(
+                                                locations=route_coords,
+                                                color=color,
+                                                weight=3,
+                                                opacity=0.7,
+                                                popup=f"Route: {win_label}",
+                                                tooltip=f"{win_label} - {len(sorted_orders)} stops"
+                                            ).add_to(global_map)
+
+                                    # Add legend
+                                    legend_html = '<div style="position: fixed; bottom: 50px; left: 50px; z-index: 1000; background-color: white; padding: 10px; border: 2px solid grey; border-radius: 5px;">'
+                                    legend_html += '<h4 style="margin: 0 0 10px 0;">Routes by Window</h4>'
+                                    for idx, win_label in enumerate(window_results.keys()):
+                                        color = route_colors[idx % len(route_colors)]
+                                        legend_html += f'<p style="margin: 5px;"><span style="background-color: {color}; width: 20px; height: 10px; display: inline-block; margin-right: 5px;"></span>{win_label}</p>'
+                                    legend_html += '</div>'
+                                    global_map.get_root().html.add_child(folium.Element(legend_html))
+
+                                    # Display map
+                                    st_folium(global_map, width=None, height=600)
+
+                                    st.caption("🎨 Each color represents a different delivery window route")
+                                else:
+                                    st.info("No route data available for map visualization")
+                    except Exception as e:
+                        st.error(f"❌ Error creating global map: {str(e)}")
+                        st.info("💡 Map visualization requires valid geocoded addresses")
 
                     st.markdown("---")
 
@@ -2458,43 +2844,61 @@ def main():
                     # Orders moved early
                     if allocation_result.moved_early:
                         with st.expander("🟢 Orders Moved Early", expanded=True):
-                            moved_df = pd.DataFrame([{
-                                "externalOrderId": a.order["order_id"],
-                                "customerID": a.order["customer_name"],
-                                "address": a.order["delivery_address"],
-                                "numberOfUnits": a.order["units"],
-                                "From Window": a.original_window,
-                                "To Window": a.assigned_window,
-                                "Reason": a.reason
-                            } for a in allocation_result.moved_early])
+                            moved_data = []
+                            for a in allocation_result.moved_early:
+                                row = {
+                                    "externalOrderId": a.order["order_id"],
+                                    "customerID": a.order["customer_name"],
+                                    "address": a.order["delivery_address"],
+                                    "numberOfUnits": a.order["units"]
+                                }
+                                csv_fields = extract_all_csv_fields(a.order)
+                                row.update(csv_fields)
+                                row["From Window"] = a.original_window
+                                row["To Window"] = a.assigned_window
+                                row["Reason"] = a.reason
+                                moved_data.append(row)
+                            moved_df = pd.DataFrame(moved_data)
                             st.dataframe(moved_df, use_container_width=True)
 
                     # Orders recommended for reschedule
                     if allocation_result.reschedule:
                         with st.expander("🟡 Orders Recommended for Reschedule", expanded=True):
-                            resc_df = pd.DataFrame([{
-                                "externalOrderId": a.order["order_id"],
-                                "customerID": a.order["customer_name"],
-                                "address": a.order["delivery_address"],
-                                "numberOfUnits": a.order["units"],
-                                "Original Window": a.original_window,
-                                "Reschedule Count": a.order.get("priorRescheduleCount", 0) or 0,
-                                "Reason": a.reason
-                            } for a in allocation_result.reschedule])
+                            resc_data = []
+                            for a in allocation_result.reschedule:
+                                row = {
+                                    "externalOrderId": a.order["order_id"],
+                                    "customerID": a.order["customer_name"],
+                                    "address": a.order["delivery_address"],
+                                    "numberOfUnits": a.order["units"]
+                                }
+                                csv_fields = extract_all_csv_fields(a.order)
+                                row.update(csv_fields)
+                                row["Original Window"] = a.original_window
+                                row["Reschedule Count"] = a.order.get("priorRescheduleCount", 0) or 0
+                                row["Reason"] = a.reason
+                                resc_data.append(row)
+                            resc_df = pd.DataFrame(resc_data)
                             st.dataframe(resc_df, use_container_width=True)
 
                     # Orders recommended for cancel
                     if allocation_result.cancel:
                         with st.expander("🔴 Orders Recommended for Cancel", expanded=True):
-                            cancel_df = pd.DataFrame([{
-                                "externalOrderId": a.order["order_id"],
-                                "customerID": a.order["customer_name"],
-                                "address": a.order["delivery_address"],
-                                "numberOfUnits": a.order["units"],
-                                "Original Window": a.original_window,
-                                "Reschedule Count": a.order.get("priorRescheduleCount", 0) or 0,
-                                "Reason": a.reason
-                            } for a in allocation_result.cancel])
+                            cancel_data = []
+                            for a in allocation_result.cancel:
+                                row = {
+                                    "externalOrderId": a.order["order_id"],
+                                    "customerID": a.order["customer_name"],
+                                    "address": a.order["delivery_address"],
+                                    "numberOfUnits": a.order["units"]
+                                }
+                                csv_fields = extract_all_csv_fields(a.order)
+                                row.update(csv_fields)
+                                row["Original Window"] = a.original_window
+                                row["Reschedule Count"] = a.order.get("priorRescheduleCount", 0) or 0
+                                row["Reason"] = a.reason
+                                cancel_data.append(row)
+                            cancel_df = pd.DataFrame(cancel_data)
                             st.dataframe(cancel_df, use_container_width=True)
 
                     # AI VALIDATION FOR FULL DAY MODE
@@ -2539,7 +2943,7 @@ PRIORITY CUSTOMER HANDLING:
                                         validation_context += f"  • Order {move.order['order_id']}: {move.order['units']} units, {move.original_window} → {move.assigned_window}\n"
 
                                 validation_context += "\nPER-WINDOW RESULTS:\n"
-                                for i, (win_start, win_end) in enumerate(sorted_windows):
+                                for i, (win_start, win_end) in enumerate(allocation_windows):
                                     win_label = window_labels_list[i]
                                     if win_label in window_results:
                                         wr = window_results[win_label]
