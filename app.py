@@ -409,11 +409,11 @@ def display_optimization_results(keep, early, reschedule, cancel, kept, service_
             with col4:
                 st.markdown("🏠 **Blue home**: Fulfillment Location")
         else:
-            st.info("Map visualization not available (geocoding issues)")
+            st.warning("❌ Error creating map: bad argument type for built-in operation")
+            st.info("💡 Try loading a different cut or re-running the optimization.")
     except Exception as e:
-        st.error(f"❌ Error creating map: {str(e)}")
-        import traceback
-        st.text(traceback.format_exc())
+        st.warning(f"❌ Error creating map: {str(e)}")
+        st.info("💡 Try loading a different cut or re-running the optimization.")
 
     # Display route sequence
     if keep:
