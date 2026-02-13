@@ -11,14 +11,15 @@ def parse_csv(file) -> Tuple[List[Dict], int]:
     """
     Parse uploaded CSV file and extract order data.
 
-    Expected CSV columns:
-    - orderID
-    - customer_name
-    - delivery_address
-    - number_of_units
-    - early_ok
-    - delivery_window_start
-    - delivery_window_end
+    Expected CSV columns (new format):
+    - externalOrderId (or orderID for legacy format)
+    - customerID (or customer_name for legacy format)
+    - address (or delivery_address for legacy format)
+    - numberOfUnits (or number_of_units for legacy format)
+    - earlyEligible (or early_ok for legacy format)
+    - deliveryWindow (combined, e.g., "09:00 AM 11:00 AM") or delivery_window_start + delivery_window_end
+    - Additional optional fields: orderId, runId, orderStatus, customerTag, deliveryDate,
+      priorRescheduleCount, fulfillmentLocation, fulfillmentGeo, fulfillmentLocationAddress, extendedCutOffTime
 
     Args:
         file: File object from Streamlit file uploader
@@ -33,6 +34,7 @@ def parse_csv(file) -> Tuple[List[Dict], int]:
             - early_delivery_ok: bool
             - delivery_window_start: datetime.time
             - delivery_window_end: datetime.time
+            - Plus all additional fields from the CSV
         - window_minutes: int (length of delivery window)
 
     Raises:
@@ -41,18 +43,36 @@ def parse_csv(file) -> Tuple[List[Dict], int]:
     # Read CSV
     df = pd.read_csv(file)
 
-    # Check required columns
-    required_columns = [
-        "orderID",
-        "customer_name",
-        "delivery_address",
-        "number_of_units",
-        "early_ok",
-        "delivery_window_start",
-        "delivery_window_end"
-    ]
+    # Detect format (new vs legacy)
+    is_new_format = "externalOrderId" in df.columns
+    is_legacy_format = "orderID" in df.columns
 
-    missing_columns = [col for col in required_columns if col not in df.columns]
+    if not is_new_format and not is_legacy_format:
+        raise ValueError("CSV must contain either 'externalOrderId' (new format) or 'orderID' (legacy format)")
+
+    # Define column mappings
+    if is_new_format:
+        required_columns = {
+            "order_id": "externalOrderId",
+            "customer_name": "customerID",
+            "delivery_address": "address",
+            "units": "numberOfUnits",
+            "early_ok": "earlyEligible",
+            "delivery_window": "deliveryWindow"
+        }
+    else:
+        required_columns = {
+            "order_id": "orderID",
+            "customer_name": "customer_name",
+            "delivery_address": "delivery_address",
+            "units": "number_of_units",
+            "early_ok": "early_ok",
+            "delivery_window_start": "delivery_window_start",
+            "delivery_window_end": "delivery_window_end"
+        }
+
+    # Check required columns exist in CSV
+    missing_columns = [csv_col for csv_col in required_columns.values() if csv_col not in df.columns]
     if missing_columns:
         raise ValueError(f"CSV missing required columns: {', '.join(missing_columns)}")
 
@@ -62,16 +82,35 @@ def parse_csv(file) -> Tuple[List[Dict], int]:
 
     for _, row in df.iterrows():
         # Parse early_ok as boolean
-        early_ok_str = str(row["early_ok"]).strip().lower()
-        early_delivery_ok = early_ok_str in ["yes", "y", "true", "1"]
+        early_col = required_columns["early_ok"]
+        if pd.isna(row[early_col]) or str(row[early_col]).strip() == "":
+            early_delivery_ok = False
+        else:
+            early_ok_str = str(row[early_col]).strip().lower()
+            early_delivery_ok = early_ok_str in ["yes", "y", "true", "1", "true"]
 
         # Parse time windows
+        order_id_col = required_columns["order_id"]
         try:
-            window_start = datetime.strptime(str(row["delivery_window_start"]).strip(), "%I:%M %p").time()
-            window_end = datetime.strptime(str(row["delivery_window_end"]).strip(), "%I:%M %p").time()
+            if is_new_format:
+                # Parse combined deliveryWindow field (e.g., "09:00 AM 11:00 AM")
+                window_str = str(row["deliveryWindow"]).strip()
+                window_parts = window_str.split()
+                if len(window_parts) == 4:
+                    # Format: "HH:MM AM HH:MM PM"
+                    start_str = f"{window_parts[0]} {window_parts[1]}"
+                    end_str = f"{window_parts[2]} {window_parts[3]}"
+                    window_start = datetime.strptime(start_str, "%I:%M %p").time()
+                    window_end = datetime.strptime(end_str, "%I:%M %p").time()
+                else:
+                    raise ValueError(f"deliveryWindow format invalid: '{window_str}'. Expected 'HH:MM AM HH:MM PM'")
+            else:
+                # Parse separate start/end fields (legacy format)
+                window_start = datetime.strptime(str(row["delivery_window_start"]).strip(), "%I:%M %p").time()
+                window_end = datetime.strptime(str(row["delivery_window_end"]).strip(), "%I:%M %p").time()
         except ValueError as e:
             raise ValueError(
-                f"Error parsing time for order {row['orderID']}: {e}. "
+                f"Error parsing time for order {row[order_id_col]}: {e}. "
                 "Expected format: 'HH:MM AM/PM' (e.g., '09:00 AM')"
             )
 
@@ -86,18 +125,30 @@ def parse_csv(file) -> Tuple[List[Dict], int]:
             window_minutes = order_window_minutes
         elif window_minutes != order_window_minutes:
             # Warn if windows differ, but continue
-            print(f"Warning: Order {row['orderID']} has different window duration ({order_window_minutes} min vs {window_minutes} min)")
+            print(f"Warning: Order {row[order_id_col]} has different window duration ({order_window_minutes} min vs {window_minutes} min)")
 
-        # Create order dict
+        # Create order dict with core fields
         order = {
-            "order_id": str(row["orderID"]),
-            "customer_name": str(row["customer_name"]),
-            "delivery_address": str(row["delivery_address"]),
-            "units": int(row["number_of_units"]),
+            "order_id": str(row[required_columns["order_id"]]),
+            "customer_name": str(row[required_columns["customer_name"]]),
+            "delivery_address": str(row[required_columns["delivery_address"]]),
+            "units": int(row[required_columns["units"]]),
             "early_delivery_ok": early_delivery_ok,
             "delivery_window_start": window_start,
             "delivery_window_end": window_end
         }
+
+        # Add all additional fields from the CSV for future use
+        if is_new_format:
+            # Store all extra fields from new format
+            optional_fields = [
+                "orderId", "runId", "orderStatus", "customerTag", "customerID",
+                "deliveryDate", "priorRescheduleCount", "fulfillmentLocation",
+                "fulfillmentGeo", "fulfillmentLocationAddress", "extendedCutOffTime"
+            ]
+            for field in optional_fields:
+                if field in df.columns:
+                    order[field] = row[field] if not pd.isna(row[field]) else None
 
         orders.append(order)
 

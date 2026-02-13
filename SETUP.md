@@ -187,7 +187,38 @@ The app will automatically open in your default browser. If not, manually open: 
 
 ### CSV Format
 
-Your CSV should have these columns:
+The Buncher supports two CSV formats:
+
+#### **New Format** (Recommended)
+
+The new format includes comprehensive order data for enhanced analytics and audit capabilities:
+
+**Required columns:**
+- `externalOrderId` - External order identifier (e.g., 1298738902)
+- `customerID` - Customer UUID or identifier
+- `address` - Full delivery address
+- `numberOfUnits` - Number of units to deliver
+- `earlyEligible` - `true` or `false` (early delivery allowed?)
+- `deliveryWindow` - Combined time window (e.g., "09:00 AM 11:00 AM")
+
+**Optional columns** (stored for future features):
+- `orderId` - Internal UUID
+- `runId` - Run/route identifier
+- `orderStatus` - Order status (e.g., "delivered", "cancelled")
+- `customerTag` - Customer segment (e.g., "new", "power", "unsatisfied")
+- `deliveryDate` - Delivery date
+- `priorRescheduleCount` - Number of times order was rescheduled
+- `fulfillmentLocation` - Fulfillment center name
+- `fulfillmentGeo` - Geographic region
+- `fulfillmentLocationAddress` - Fulfillment center address
+- `extendedCutOffTime` - Extended cutoff time
+
+**Order Status Filter:**
+When using the new format with `orderStatus`, you can filter which orders to include using the sidebar filter. This is useful for audit purposes to verify if cancelled orders should have been included in the route.
+
+#### **Legacy Format** (Still Supported)
+
+Your CSV can also use the original format:
 - `orderID` - Unique order identifier
 - `customer_name` - Customer name
 - `delivery_address` - Full delivery address
@@ -196,7 +227,8 @@ Your CSV should have these columns:
 - `delivery_window_start` - Start time (e.g., "09:00 AM")
 - `delivery_window_end` - End time (e.g., "11:00 AM")
 
-See `example_orders.csv` (if available) for a sample.
+**Format Detection:**
+The parser automatically detects which format you're using based on column names. Both formats work identically for optimization.
 
 ---
 

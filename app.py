@@ -135,8 +135,8 @@ def create_map_visualization(keep, cancel, early, reschedule, geocoded, depot_ad
             tooltip_html = f"""
                 <div style="font-family: Arial; font-size: 12px;">
                     <b>✅ Order #{order_id}</b><br/>
-                    <b>Customer:</b> {customer_name}<br/>
-                    <b>Units:</b> {units}<br/>
+                    <b>customerID:</b> {customer_name}<br/>
+                    <b>numberOfUnits:</b> {units}<br/>
                     <b>Est. Service Time:</b> {service_time} min<br/>
                     <b>Sequence:</b> Stop #{sequence_index + 1}
                 </div>
@@ -189,8 +189,8 @@ def create_map_visualization(keep, cancel, early, reschedule, geocoded, depot_ad
                                 tooltip_html = f"""
                                     <div style="font-family: Arial; font-size: 12px;">
                                         <b>🟡 Order #{order_id}</b><br/>
-                                        <b>Customer:</b> {customer_name}<br/>
-                                        <b>Units:</b> {units}<br/>
+                                        <b>customerID:</b> {customer_name}<br/>
+                                        <b>numberOfUnits:</b> {units}<br/>
                                         <b>Action:</b> {category}<br/>
                                         <b>Reason:</b> {reason}
                                     </div>
@@ -224,8 +224,8 @@ def create_map_visualization(keep, cancel, early, reschedule, geocoded, depot_ad
                                 tooltip_html = f"""
                                     <div style="font-family: Arial; font-size: 12px;">
                                         <b>🔴 Order #{order_id}</b><br/>
-                                        <b>Customer:</b> {customer_name}<br/>
-                                        <b>Units:</b> {units}<br/>
+                                        <b>customerID:</b> {customer_name}<br/>
+                                        <b>numberOfUnits:</b> {units}<br/>
                                         <b>Action:</b> CANCEL<br/>
                                         <b>Reason:</b> {reason}
                                     </div>
@@ -431,10 +431,10 @@ def display_optimization_results(keep, early, reschedule, cancel, kept, service_
         for k in sorted(keep, key=lambda x: x["sequence_index"]):
             row = {
                 "Seq": k["sequence_index"] + 1,
-                "Order ID": k["order_id"],
-                "Customer": k["customer_name"],
-                "Address": k["delivery_address"],
-                "Units": k["units"],
+                "externalOrderId": k["order_id"],
+                "customerID": k["customer_name"],
+                "address": k["delivery_address"],
+                "numberOfUnits": k["units"],
                 "Score": f"{k.get('optimal_score', 0)}/100",
                 "Est. Service Time": f"{service_times[k['node']]} min" if service_times and k['node'] < len(service_times) else "N/A",
                 "Est. Arrival": format_time_minutes(k["estimated_arrival"])
@@ -456,10 +456,10 @@ def display_optimization_results(keep, early, reschedule, cancel, kept, service_
         early_data = []
         for e in early:
             row = {
-                "Order ID": e["order_id"],
-                "Customer": e["customer_name"],
-                "Address": e["delivery_address"],
-                "Units": e["units"],
+                "externalOrderId": e["order_id"],
+                "customerID": e["customer_name"],
+                "address": e["delivery_address"],
+                "numberOfUnits": e["units"],
                 "Score": f"{e.get('optimal_score', 0)}/100"
             }
             if show_ai_explanations:
@@ -480,10 +480,10 @@ def display_optimization_results(keep, early, reschedule, cancel, kept, service_
     for r in reschedule:
         row = {
             "Action": "📅 RESCHEDULE",
-            "Order ID": r["order_id"],
-            "Customer": r["customer_name"],
-            "Address": r["delivery_address"],
-            "Units": r["units"],
+            "externalOrderId": r["order_id"],
+            "customerID": r["customer_name"],
+            "address": r["delivery_address"],
+            "numberOfUnits": r["units"],
             "Score": f"{r.get('optimal_score', 0)}/100"
         }
         if show_ai_explanations:
@@ -495,10 +495,10 @@ def display_optimization_results(keep, early, reschedule, cancel, kept, service_
     for c in cancel:
         row = {
             "Action": "❌ CANCEL",
-            "Order ID": c["order_id"],
-            "Customer": c["customer_name"],
-            "Address": c["delivery_address"],
-            "Units": c["units"],
+            "externalOrderId": c["order_id"],
+            "customerID": c["customer_name"],
+            "address": c["delivery_address"],
+            "numberOfUnits": c["units"],
             "Score": f"{c.get('optimal_score', 0)}/100"
         }
         if show_ai_explanations:
@@ -679,6 +679,14 @@ def main():
         help="Upload CSV with order data"
     )
 
+    # Order status filter (for new CSV format with orderStatus field)
+    status_filter = st.sidebar.multiselect(
+        "Filter by Order Status",
+        options=["delivered", "cancelled"],
+        default=["delivered"],
+        help="Select which order statuses to include (used for audit purposes)"
+    )
+
     # Random sample button
     if st.sidebar.button("🎲 Generate Random Sample", use_container_width=True, help="Generate random orders for testing", type="primary"):
         # Set flag to show parameter questions
@@ -792,31 +800,74 @@ def main():
 
                 zip_bases = [48120, 48124, 48126, 48146, 48180, 48183, 48184, 48186, 48192, 48195]
 
-                # Generate CSV content
-                csv_content = "orderID,customer_name,delivery_address,number_of_units,early_ok,delivery_window_start,delivery_window_end\n"
+                # Generate CSV content (new format)
+                import uuid
+                from datetime import date, timedelta
+
+                csv_content = "orderId,runId,externalOrderId,orderStatus,customerID,customerTag,address,deliveryDate,deliveryWindow,earlyEligible,priorRescheduleCount,numberOfUnits,fulfillmentLocation,fulfillmentGeo,fulfillmentLocationAddress,extendedCutOffTime\n"
+
+                # Random base run ID
+                base_run_id = random.randint(60000, 70000)
+
+                # Fulfillment locations in Detroit area
+                fulfillment_locations = [
+                    ("Clinton Twp - 243", "Detroit", "40445 S. Groesbeck Hwy, Clinton Twp., MI 48036"),
+                    ("Lincoln Park - 208", "Detroit", "3710 Dix Hwy Lincoln Park, MI 48146"),
+                    ("Wixom - 122", "Detroit", "49900 Grand River Ave. Wixom, MI 48393"),
+                    ("Waterford - 53", "Detroit", "4200 Highland Rd. Waterford, MI 48328"),
+                    ("Belleville - 72", "Detroit", "9701 Belleville Rd Belleville, MI 48111")
+                ]
 
                 for i in range(num_orders):
-                    order_id = 90000 + i
-                    customer_name = f"{random.choice(first_names)} {random.choice(last_names)}"
+                    # Generate UUIDs
+                    order_uuid = str(uuid.uuid4())
+                    customer_uuid = str(uuid.uuid4())
+
+                    # Order IDs
+                    external_order_id = 1290000000 + random.randint(1000, 999999)
+                    run_id = f'"{base_run_id + random.randint(0, 3):,}"'  # Format with comma
+
+                    # Order status (mix of delivered and cancelled)
+                    order_status = random.choice(["delivered"] * 8 + ["cancelled"] * 2)  # 80% delivered
+
+                    # Customer tag
+                    customer_tag = random.choice(["new", "power", "unsatisfied"])
 
                     # Generate address
                     street_num = random.randint(100, 9999)
                     street = random.choice(streets)
                     city = random.choice(cities)
                     zip_code = random.choice(zip_bases) + random.randint(0, 20)
-                    delivery_address = f"{street_num} {street} {city} {zip_code}"
+                    delivery_address = f"{street_num} {street} {zip_code} {city}"
+
+                    # Delivery date (today)
+                    delivery_date = date.today().strftime("%B %d, %Y")
+
+                    # Delivery window (combined format)
+                    window_start = "09:00 AM"
+                    window_end = "11:00 AM"
+                    delivery_window = f"{window_start} {window_end}"
+
+                    # Early delivery allowed?
+                    early_eligible = "true" if random.randint(1, 100) <= early_percentage else "false"
+
+                    # Prior reschedule count (some orders have history)
+                    prior_reschedule = "" if random.random() > 0.3 else str(random.randint(1, 3))
 
                     # Generate units
                     units = random.randint(unit_min, unit_max)
 
-                    # Early delivery allowed?
-                    early_ok = "Yes" if random.randint(1, 100) <= early_percentage else "No"
+                    # Fulfillment location
+                    fulfillment = random.choice(fulfillment_locations)
+                    fulfillment_location = fulfillment[0]
+                    fulfillment_geo = fulfillment[1]
+                    fulfillment_address = fulfillment[2]
 
-                    # Delivery window (all same window for now)
-                    window_start = "09:00 AM"
-                    window_end = "11:00 AM"
+                    # Extended cutoff time (e.g., 2 hours before window)
+                    cutoff_hour = 7  # 7 AM for 9 AM window
+                    extended_cutoff = f"{delivery_date}, {cutoff_hour}:00 AM"
 
-                    csv_content += f'{order_id},"{customer_name}","{delivery_address}",{units},{early_ok},{window_start},{window_end}\n'
+                    csv_content += f'{order_uuid},{run_id},{external_order_id},{order_status},{customer_uuid},{customer_tag},"{delivery_address}","{delivery_date}",{delivery_window},{early_eligible},{prior_reschedule},{units},{fulfillment_location},{fulfillment_geo},"{fulfillment_address}","{extended_cutoff}"\n'
 
                 # Store generated CSV
                 st.session_state.sample_file_content = csv_content.encode('utf-8')
@@ -1045,6 +1096,15 @@ def main():
         try:
             if uploaded_file:
                 csv_orders, window_minutes = parser.parse_csv(uploaded_file)
+
+                # Apply status filter if orderStatus field exists
+                if csv_orders and "orderStatus" in csv_orders[0]:
+                    original_count = len(csv_orders)
+                    csv_orders = [o for o in csv_orders if o.get("orderStatus") in status_filter]
+                    filtered_count = original_count - len(csv_orders)
+                    if filtered_count > 0:
+                        st.info(f"🔍 Filtered out {filtered_count} orders based on status (keeping: {', '.join(status_filter)})")
+
                 orders.extend(csv_orders)
 
             if st.session_state.manual_orders:
@@ -1066,26 +1126,40 @@ def main():
 
             # Show preview with edit capability
             with st.expander("📋 Order Preview & Management", expanded=True):
-                preview_df = pd.DataFrame([
-                    {
-                        "Order ID": o["order_id"],
-                        "Customer": o["customer_name"],
-                        "Address": o["delivery_address"],
-                        "Units": o["units"],
-                        "Early OK": "Yes" if o["early_delivery_ok"] else "No",
-                        "Window": f"{o['delivery_window_start'].strftime('%I:%M %p')} - {o['delivery_window_end'].strftime('%I:%M %p')}"
+                # Build preview dataframe with all available fields
+                preview_rows = []
+                for o in orders:
+                    row = {
+                        "externalOrderId": o["order_id"],
+                        "customerID": o["customer_name"],
+                        "address": o["delivery_address"],
+                        "numberOfUnits": o["units"],
+                        "earlyEligible": "true" if o["early_delivery_ok"] else "false",
+                        "deliveryWindow": f"{o['delivery_window_start'].strftime('%I:%M %p')} {o['delivery_window_end'].strftime('%I:%M %p')}"
                     }
-                    for o in orders
-                ])
+
+                    # Add optional fields from new CSV format if present
+                    optional_fields = ["orderId", "runId", "orderStatus", "customerTag",
+                                     "deliveryDate", "priorRescheduleCount", "fulfillmentLocation",
+                                     "fulfillmentGeo", "fulfillmentLocationAddress", "extendedCutOffTime"]
+
+                    for field in optional_fields:
+                        if field in o and o[field] is not None:
+                            row[field] = o[field]
+
+                    preview_rows.append(row)
+
+                preview_df = pd.DataFrame(preview_rows)
 
                 edited_df = st.data_editor(
                     preview_df,
                     num_rows="dynamic",
                     width="stretch",
-                    key="order_editor"
+                    key="order_editor",
+                    height=400
                 )
 
-                st.caption(f"Showing all {len(orders)} orders. You can edit values directly or add/remove rows.")
+                st.caption(f"Showing all {len(orders)} orders with all available fields. You can edit values directly or add/remove rows.")
 
             # Validate orders
             valid_orders, errors = parser.validate_orders(orders)
@@ -1804,45 +1878,45 @@ def main():
                     # KEEP orders
                     for order in opt['keep']:
                         all_orders_for_edit.append({
-                            'Order ID': order['order_id'],
-                            'Customer': order['customer_name'],
-                            'Units': order['units'],
+                            'externalOrderId': order['order_id'],
+                            'customerID': order['customer_name'],
+                            'numberOfUnits': order['units'],
                             'Status': 'KEEP',
                             'Sequence': order.get('sequence_index', 0) + 1,
-                            'Address': order['delivery_address']
+                            'address': order['delivery_address']
                         })
 
                     # EARLY orders
                     for order in opt['early']:
                         all_orders_for_edit.append({
-                            'Order ID': order['order_id'],
-                            'Customer': order['customer_name'],
-                            'Units': order['units'],
+                            'externalOrderId': order['order_id'],
+                            'customerID': order['customer_name'],
+                            'numberOfUnits': order['units'],
                             'Status': 'EARLY',
                             'Sequence': None,
-                            'Address': order['delivery_address']
+                            'address': order['delivery_address']
                         })
 
                     # RESCHEDULE orders
                     for order in opt['reschedule']:
                         all_orders_for_edit.append({
-                            'Order ID': order['order_id'],
-                            'Customer': order['customer_name'],
-                            'Units': order['units'],
+                            'externalOrderId': order['order_id'],
+                            'customerID': order['customer_name'],
+                            'numberOfUnits': order['units'],
                             'Status': 'RESCHEDULE',
                             'Sequence': None,
-                            'Address': order['delivery_address']
+                            'address': order['delivery_address']
                         })
 
                     # CANCEL orders
                     for order in opt['cancel']:
                         all_orders_for_edit.append({
-                            'Order ID': order['order_id'],
-                            'Customer': order['customer_name'],
-                            'Units': order['units'],
+                            'externalOrderId': order['order_id'],
+                            'customerID': order['customer_name'],
+                            'numberOfUnits': order['units'],
                             'Status': 'CANCEL',
                             'Sequence': None,
-                            'Address': order['delivery_address']
+                            'address': order['delivery_address']
                         })
 
                     edit_df = pd.DataFrame(all_orders_for_edit)
@@ -1864,7 +1938,7 @@ def main():
                                 step=1
                             )
                         },
-                        disabled=["Order ID", "Customer", "Units", "Address"],
+                        disabled=["externalOrderId", "customerID", "numberOfUnits", "address"],
                         hide_index=True,
                         use_container_width=True,
                         key="sandbox_editor"
@@ -1879,7 +1953,7 @@ def main():
 
                         for _, row in edited_df.iterrows():
                             # Find original order
-                            order_id = row['Order ID']
+                            order_id = row['externalOrderId']
                             original_order = None
                             for o in valid_orders:
                                 if o['order_id'] == order_id:
@@ -1892,9 +1966,9 @@ def main():
                             # Build order dict based on status
                             order_dict = {
                                 'order_id': order_id,
-                                'customer_name': row['Customer'],
-                                'delivery_address': row['Address'],
-                                'units': row['Units'],
+                                'customer_name': row['customerID'],
+                                'delivery_address': row['address'],
+                                'units': row['numberOfUnits'],
                                 'early_delivery_ok': original_order['early_delivery_ok'],
                                 'category': row['Status']
                             }
@@ -2063,10 +2137,10 @@ def main():
 
                                 row = {
                                     "Seq": int(k.get("sequence_index", 0)) + 1,
-                                    "Order ID": str(k.get("order_id", "")),
-                                    "Customer": str(k.get("customer_name", "")),
-                                    "Address": str(k.get("delivery_address", "")),
-                                    "Units": int(k.get("units", 0)),
+                                    "externalOrderId": str(k.get("order_id", "")),
+                                    "customerID": str(k.get("customer_name", "")),
+                                    "address": str(k.get("delivery_address", "")),
+                                    "numberOfUnits": int(k.get("units", 0)),
                                     "Est. Service Time": f"{service_time} min"
                                 }
                                 route_table_data.append(row)
