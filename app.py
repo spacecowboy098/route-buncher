@@ -2688,6 +2688,7 @@ def main():
                     # Debug: Show number of window results
                     st.info(f"🔍 Debug: Found {len(window_results)} window(s) with results")
 
+                    # Wrap entire map section to prevent auto-refresh on errors
                     try:
                         import folium
                         from folium import plugins
@@ -2833,8 +2834,14 @@ def main():
                                 else:
                                     st.info("No route data available for map visualization")
                     except Exception as e:
+                        import traceback
                         st.error(f"❌ Error creating global map: {str(e)}")
+                        with st.expander("🐛 Debug: Full error details"):
+                            st.code(traceback.format_exc())
                         st.info("💡 Map visualization requires valid geocoded addresses")
+
+                    # Ensure this section completes without issues
+                    st.success("✅ Map section completed")
 
                     st.markdown("---")
 
