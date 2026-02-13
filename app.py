@@ -1594,12 +1594,27 @@ def main():
                                 addresses,
                                 service_times
                             )
-                            st.components.v1.html(map_chart, height=600)
+                            if map_chart:
+                                st_folium(map_chart, width=1200, height=600)
+
+                                # Map legend
+                                col1, col2, col3, col4 = st.columns(4)
+                                with col1:
+                                    st.markdown("🟢 **Green circle**: Orders to KEEP (on route)")
+                                with col2:
+                                    st.markdown("🕒 **Orange clock**: Early/Reschedule options")
+                                with col3:
+                                    st.markdown("❌ **Red X**: Orders to CANCEL (too far)")
+                                with col4:
+                                    st.markdown("🏠 **Blue home**: Fulfillment Location")
+                            else:
+                                st.warning("❌ Error creating map: bad argument type for built-in operation")
+                                st.info("💡 Try loading a different cut or re-running the optimization.")
                         else:
                             st.warning("⚠️ Map data not available. Please load a cut using the button above.")
                     except Exception as e:
-                        st.error(f"❌ Error creating map: {e}")
-                        st.info("Try loading a different cut or re-running the optimization.")
+                        st.warning(f"❌ Error creating map: {str(e)}")
+                        st.info("💡 Try loading a different cut or re-running the optimization.")
 
         except Exception as e:
             st.error(f"❌ Error processing file: {e}")
