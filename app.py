@@ -557,17 +557,17 @@ def generate_route_explanation(keep, early, reschedule, cancel, time_matrix, veh
 
     # EARLY rationale
     if early:
-        explanation.append(f"**⏰ EARLY DELIVERY ({len(early)} orders)**")
+        explanation.append(f"**⏰ Deliver Early ({len(early)} orders)**")
         explanation.append(f"Customer approved early delivery. These are <10 min from route cluster - move to earlier window for efficiency.\n")
 
-    # RESCHEDULE rationale
+    # Reschedule rationale
     if reschedule:
-        explanation.append(f"**📅 RESCHEDULE ({len(reschedule)} orders)**")
+        explanation.append(f"**📅 Reschedule ({len(reschedule)} orders)**")
         explanation.append(f"Within 10-20 min of cluster but won't fit due to capacity/time. Move to adjacent window where they can group with other nearby orders.\n")
 
-    # CANCEL rationale
+    # Cancel rationale
     if cancel:
-        explanation.append(f"**❌ CANCEL ({len(cancel)} orders)**")
+        explanation.append(f"**❌ Cancel ({len(cancel)} orders)**")
         explanation.append(f"≥20 min from cluster - geographically isolated. Cost to serve exceeds revenue. Including them would force dropping multiple better-positioned orders.\n")
 
     explanation.append("**Why This Route**: Algorithm maximizes orders delivered within constraints. Uses real Google Maps drive times, not straight-line distance.")
@@ -693,7 +693,7 @@ def display_optimization_results(keep, early, reschedule, cancel, kept, service_
             with col2:
                 st.markdown("🕒 **Orange clock**: Early/Reschedule options")
             with col3:
-                st.markdown("❌ **Red X**: Orders to CANCEL (too far)")
+                st.markdown("❌ **Red X**: Orders to Cancel (too far)")
             with col4:
                 st.markdown("🏠 **Blue home**: Fulfillment Location")
         else:
@@ -712,8 +712,8 @@ def display_optimization_results(keep, early, reschedule, cancel, kept, service_
         route_parts.append("Fulfillment Location")
         st.write(" → ".join(route_parts))
 
-    # Display KEEP orders
-    st.subheader("✅ KEEP in this window")
+    # Display In Window orders
+    st.subheader("✅ In Window")
     if keep:
         keep_data = []
         for k in sorted(keep, key=lambda x: x["sequence_index"]):
@@ -737,8 +737,8 @@ def display_optimization_results(keep, early, reschedule, cancel, kept, service_
     else:
         st.info("No orders kept in route (capacity or time constraints too tight)")
 
-    # Display EARLY DELIVERY orders
-    st.subheader("⏰ Move to EARLY DELIVERY")
+    # Display Deliver Early orders
+    st.subheader("⏰ Deliver Early")
     if early:
         early_data = []
         for e in early:
@@ -759,13 +759,13 @@ def display_optimization_results(keep, early, reschedule, cancel, kept, service_
     else:
         st.info("No orders recommended for early delivery")
 
-    # Display RESCHEDULE and CANCEL orders combined
+    # Display Reschedule and Cancel orders combined
     st.subheader("🚫 DO NOT DELIVER in this window")
     excluded_orders = []
 
     for r in reschedule:
         # Create row with Action + standard 7 fields
-        row = {"Action": "📅 RESCHEDULE"}
+        row = {"Action": "📅 Reschedule"}
         row.update(create_standard_row(r))
 
         # Add optimizer-computed fields at the end
@@ -779,7 +779,7 @@ def display_optimization_results(keep, early, reschedule, cancel, kept, service_
 
     for c in cancel:
         # Create row with Action + standard 7 fields
-        row = {"Action": "❌ CANCEL"}
+        row = {"Action": "❌ Cancel"}
         row.update(create_standard_row(c))
 
         # Add optimizer-computed fields at the end
@@ -2335,6 +2335,9 @@ def main():
                     st.markdown("---")
                     st.success("🔴 CHECKPOINT C: After allocation summary, starting per-window loop")
 
+                    # Note: Movement Summary with per-window breakdown will be added after window_results are populated
+                    # This placeholder reminds us where it will appear in the final display
+
                     # Now optimize each window separately
                     st.markdown("### 🚛 Per-Window Optimization Results")
 
@@ -2531,9 +2534,9 @@ def main():
                             # Display results
                             st.markdown(f"**Route Summary**: {len(keep)} orders, {kept_units} units")
 
-                            # Show KEEP orders
+                            # Show In Window orders
                             if keep:
-                                st.markdown("#### ✅ KEEP (On Route)")
+                                st.markdown(f"#### ✅ In Window ({len(keep)} orders)")
                                 keep_data = []
                                 for k in sorted(keep, key=lambda x: x["sequence_index"]):
                                     row = {"Seq": k["sequence_index"] + 1}
@@ -2542,9 +2545,9 @@ def main():
                                 keep_df = pd.DataFrame(keep_data)
                                 st.dataframe(keep_df, width='stretch')
 
-                            # Show EARLY orders
+                            # Show Deliver Early orders
                             if early:
-                                st.markdown("#### ⏰ EARLY DELIVERY")
+                                st.markdown(f"#### ⏰ Deliver Early ({len(early)} orders)")
                                 early_data = []
                                 for e in early:
                                     row = create_standard_row(e)
@@ -2552,9 +2555,9 @@ def main():
                                 early_df = pd.DataFrame(early_data)
                                 st.dataframe(early_df, width='stretch')
 
-                            # Show RESCHEDULE orders
+                            # Show Reschedule orders
                             if reschedule:
-                                st.markdown("#### 📅 RESCHEDULE")
+                                st.markdown(f"#### 📅 Reschedule ({len(reschedule)} orders)")
                                 resc_data = []
                                 for r in reschedule:
                                     row = create_standard_row(r)
@@ -2562,9 +2565,9 @@ def main():
                                 resc_df = pd.DataFrame(resc_data)
                                 st.dataframe(resc_df, width='stretch')
 
-                            # Show CANCEL orders
+                            # Show Cancel orders
                             if cancel:
-                                st.markdown("#### ❌ CANCEL")
+                                st.markdown(f"#### ❌ Cancel ({len(cancel)} orders)")
                                 cancel_data = []
                                 for c in cancel:
                                     row = create_standard_row(c)
@@ -2739,12 +2742,61 @@ def main():
                     st.markdown("---")
                     st.success("🟢 CHECKPOINT 1: After map, before allocation details")
 
-                    # Show global allocation tables
-                    st.markdown("### 📊 Global Allocation Details")
+                    # Movement Summary
+                    st.markdown("### 📊 Movement Summary")
 
-                    # Orders moved early
+                    # Calculate totals
+                    total_in_window = sum(result['orders_kept'] for result in window_results.values())
+                    total_delivered_early = len(allocation_result.moved_early)
+                    total_rescheduled = len(allocation_result.reschedule)
+                    total_cancelled = len(allocation_result.cancel)
+
+                    # Display summary in columns
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("✅ In Window", total_in_window)
+                    with col2:
+                        st.metric("⏰ Deliver Early", total_delivered_early)
+                    with col3:
+                        st.metric("📅 Reschedule", total_rescheduled)
+                    with col4:
+                        st.metric("❌ Cancel", total_cancelled)
+
+                    st.markdown("---")
+
+                    # Per-window breakdown table
+                    st.markdown("#### Movement by Window")
+                    window_breakdown = []
+                    for win_label, result in window_results.items():
+                        # Skip empty windows
+                        if result.get('empty', False):
+                            continue
+
+                        # Count orders that originated in this window
+                        moved_early_count = len([a for a in allocation_result.moved_early if a.original_window == win_label])
+                        rescheduled_count = len([a for a in allocation_result.reschedule if a.original_window == win_label])
+                        cancelled_count = len([a for a in allocation_result.cancel if a.original_window == win_label])
+                        in_window_count = result.get('orders_kept', 0)
+
+                        window_breakdown.append({
+                            "Window": win_label,
+                            "In Window": in_window_count,
+                            "Deliver Early": moved_early_count,
+                            "Reschedule": rescheduled_count,
+                            "Cancel": cancelled_count
+                        })
+
+                    if window_breakdown:
+                        breakdown_df = pd.DataFrame(window_breakdown)
+                        st.dataframe(breakdown_df, width='stretch')
+                    else:
+                        st.info("No window data available for breakdown table")
+
+                    st.markdown("---")
+
+                    # Global collapsible sections for movement details
                     if allocation_result.moved_early:
-                        with st.expander("🟢 Orders Moved Early", expanded=True):
+                        with st.expander(f"⏰ Deliver Early ({len(allocation_result.moved_early)} orders)", expanded=False):
                             moved_data = []
                             for a in allocation_result.moved_early:
                                 row = create_standard_row(a.order)
@@ -2755,9 +2807,8 @@ def main():
                             moved_df = pd.DataFrame(moved_data)
                             st.dataframe(moved_df, width='stretch')
 
-                    # Orders recommended for reschedule
                     if allocation_result.reschedule:
-                        with st.expander("🟡 Orders Recommended for Reschedule", expanded=True):
+                        with st.expander(f"📅 Reschedule ({len(allocation_result.reschedule)} orders)", expanded=False):
                             resc_data = []
                             for a in allocation_result.reschedule:
                                 row = create_standard_row(a.order)
@@ -2768,9 +2819,8 @@ def main():
                             resc_df = pd.DataFrame(resc_data)
                             st.dataframe(resc_df, width='stretch')
 
-                    # Orders recommended for cancel
                     if allocation_result.cancel:
-                        with st.expander("🔴 Orders Recommended for Cancel", expanded=True):
+                        with st.expander(f"❌ Cancel ({len(allocation_result.cancel)} orders)", expanded=False):
                             cancel_data = []
                             for a in allocation_result.cancel:
                                 row = create_standard_row(a.order)
@@ -3087,9 +3137,9 @@ Be concise but thorough. Focus on actionable insights."""
 
                             st.markdown(f"**Route Summary**: {result['orders_kept']} orders, {result['total_units']} units")
 
-                            # Show KEEP orders
+                            # Show In Window orders (all orders on route in this window)
                             if result['keep']:
-                                st.markdown("#### ✅ KEEP (On Route)")
+                                st.markdown(f"#### ✅ In Window ({len(result['keep'])} orders)")
                                 keep_data = []
                                 for k in sorted(result['keep'], key=lambda x: x.get("sequence_index", 0)):
                                     row = {"Seq": k.get("sequence_index", 0) + 1}
@@ -3098,64 +3148,45 @@ Be concise but thorough. Focus on actionable insights."""
                                 keep_df = pd.DataFrame(keep_data)
                                 st.dataframe(keep_df, width="stretch")
 
-                            # Show other categories if they exist
-                            for category, label, emoji in [
-                                ('early', 'EARLY DELIVERY', '⏰'),
-                                ('reschedule', 'RESCHEDULE', '📅'),
-                                ('cancel', 'CANCEL', '❌')
-                            ]:
-                                if result.get(category):
-                                    st.markdown(f"#### {emoji} {label}")
-                                    data = []
-                                    for item in result[category]:
-                                        row = create_standard_row(item)
-                                        data.append(row)
-                                    df = pd.DataFrame(data)
-                                    st.dataframe(df, width="stretch")
+                            # Show combined movement details for orders that MOVED OUT of this window
+                            delivered_early_from_window = [a for a in allocation_result.moved_early if a.original_window == win_label]
+                            rescheduled_from_window = [a for a in allocation_result.reschedule if a.original_window == win_label]
+                            cancelled_from_window = [a for a in allocation_result.cancel if a.original_window == win_label]
 
-                    st.markdown("---")
+                            total_moved_out = len(delivered_early_from_window) + len(rescheduled_from_window) + len(cancelled_from_window)
 
-                    # Show global allocation tables
-                    st.markdown("### 📊 Global Allocation Details")
+                            if total_moved_out > 0:
+                                with st.expander(f"📤 Moved Out of Window ({total_moved_out} orders)", expanded=False):
+                                    moved_out_data = []
 
-                    # Orders moved early
-                    if allocation_result.moved_early:
-                        with st.expander("🟢 Orders Moved Early", expanded=True):
-                            moved_data = []
-                            for a in allocation_result.moved_early:
-                                row = create_standard_row(a.order)
-                                row["From Window"] = a.original_window
-                                row["To Window"] = a.assigned_window
-                                row["Reason"] = a.reason
-                                moved_data.append(row)
-                            moved_df = pd.DataFrame(moved_data)
-                            st.dataframe(moved_df, width="stretch")
+                                    # Add deliver early orders
+                                    for a in delivered_early_from_window:
+                                        row = create_standard_row(a.order)
+                                        row["Action"] = "⏰ Deliver Early"
+                                        row["Moved To"] = a.assigned_window
+                                        row["Reason"] = a.reason
+                                        moved_out_data.append(row)
 
-                    # Orders recommended for reschedule
-                    if allocation_result.reschedule:
-                        with st.expander("🟡 Orders Recommended for Reschedule", expanded=True):
-                            resc_data = []
-                            for a in allocation_result.reschedule:
-                                row = create_standard_row(a.order)
-                                row["Original Window"] = a.original_window
-                                row["Reschedule Count"] = a.order.get("priorRescheduleCount", 0) or 0
-                                row["Reason"] = a.reason
-                                resc_data.append(row)
-                            resc_df = pd.DataFrame(resc_data)
-                            st.dataframe(resc_df, width="stretch")
+                                    # Add reschedule orders
+                                    for a in rescheduled_from_window:
+                                        row = create_standard_row(a.order)
+                                        row["Action"] = "📅 Reschedule"
+                                        row["Moved To"] = "Later window/date"
+                                        row["Reschedule Count"] = a.order.get("priorRescheduleCount", 0) or 0
+                                        row["Reason"] = a.reason
+                                        moved_out_data.append(row)
 
-                    # Orders recommended for cancel
-                    if allocation_result.cancel:
-                        with st.expander("🔴 Orders Recommended for Cancel", expanded=True):
-                            cancel_data = []
-                            for a in allocation_result.cancel:
-                                row = create_standard_row(a.order)
-                                row["Original Window"] = a.original_window
-                                row["Reschedule Count"] = a.order.get("priorRescheduleCount", 0) or 0
-                                row["Reason"] = a.reason
-                                cancel_data.append(row)
-                            cancel_df = pd.DataFrame(cancel_data)
-                            st.dataframe(cancel_df, width="stretch")
+                                    # Add cancel orders
+                                    for a in cancelled_from_window:
+                                        row = create_standard_row(a.order)
+                                        row["Action"] = "❌ Cancel"
+                                        row["Moved To"] = "N/A"
+                                        row["Reschedule Count"] = a.order.get("priorRescheduleCount", 0) or 0
+                                        row["Reason"] = a.reason
+                                        moved_out_data.append(row)
+
+                                    moved_out_df = pd.DataFrame(moved_out_data)
+                                    st.dataframe(moved_out_df, width="stretch")
 
                     st.markdown("---")
 
