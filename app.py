@@ -894,9 +894,6 @@ def main():
         help="Upload CSV with order data in the expected format"
     )
 
-    if uploaded_file:
-        st.sidebar.success(f"✅ {uploaded_file.name}")
-
     # Initialize variables for progressive reveal
     orders = None
     window_minutes = None
