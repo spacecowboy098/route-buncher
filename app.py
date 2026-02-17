@@ -815,6 +815,10 @@ def check_password() -> bool:
     Returns:
         bool: True if user is authenticated, False otherwise
     """
+    # Check if authentication is required
+    if not config.is_auth_required():
+        return True
+
     # Initialize authentication state
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
@@ -1444,9 +1448,9 @@ def main():
             # Mode selector
             mode = st.radio(
                 "Choose optimization mode:",
-                ["One window", "Full day"],
-                index=1,  # Default to "Full day"
-                help="One window: optimize a single delivery window. Full day: allocate orders across multiple windows."
+                ["One Window", "Multiple Windows"],
+                index=1,  # Default to "Multiple Windows"
+                help="One Window: optimize a single delivery window. Multiple Windows: allocate orders across multiple windows."
             )
 
             # Validate orders
@@ -1461,7 +1465,7 @@ def main():
             selected_window = None
             window_capacities = {}
 
-            if mode == "One window":
+            if mode == "One Window":
                 st.markdown("### 📅 Select Window")
                 selected_window_label = st.selectbox(
                     "Choose delivery window to optimize:",
@@ -1487,7 +1491,7 @@ def main():
                 with col3:
                     st.metric("Vehicle capacity", vehicle_capacity)
 
-            else:  # Full day mode
+            else:  # Multiple Windows mode
                 # Show window labels in header
                 window_summary = " | ".join([f"**{label}**" for label in window_labels_list])
                 st.markdown(f"### 🚛 Configure Capacity Per Window\n{window_summary}")
@@ -1683,7 +1687,7 @@ def main():
                     progress_text.markdown(f"🚐 **{step_name}** ({percent}%)")
 
                 # MODE-SPECIFIC OPTIMIZATION
-                if mode == "One window":
+                if mode == "One Window":
                     # Filter orders to selected window
                     window_orders = [o for o in valid_orders if
                                    o['delivery_window_start'] == selected_window[0] and
@@ -2294,10 +2298,10 @@ def main():
                                     show_ai_explanations=False
                                 )
 
-                elif mode == "Full day":
-                    st.success("🔴 CHECKPOINT A: Full day mode started")
-                    # FULL DAY MODE: Allocate orders across windows, then optimize each window
-                    st.markdown("## 🌅 Full Day Optimization")
+                elif mode == "Multiple Windows":
+                    st.success("🔴 CHECKPOINT A: Multiple Windows mode started")
+                    # MULTIPLE WINDOWS MODE: Allocate orders across windows, then optimize each window
+                    st.markdown("## 🌅 Multiple Windows Optimization")
 
                     # Import allocator
                     from allocator import allocate_orders_across_windows, window_label
@@ -2451,7 +2455,7 @@ def main():
                         'window_capacities': window_capacities,
                         'allocation_windows': allocation_windows,
                         'depot_address': depot_address,
-                        'mode': 'Full day',
+                        'mode': 'Multiple Windows',
                         'ai_validation': None,
                         'use_ai': st.session_state.get('use_ai', False)
                     }
@@ -2981,8 +2985,8 @@ Be concise but thorough. Focus on actionable insights."""
                 if 'full_day_results' in st.session_state:
                     st.sidebar.write(f"• full_day_results is not None: {st.session_state.full_day_results is not None}")
 
-            # Display stored One window results (when not running optimization but results exist in session state)
-            if valid_orders and not run_optimization and mode == "One window" and "optimization_results" in st.session_state and st.session_state.optimization_results:
+            # Display stored One Window results (when not running optimization but results exist in session state)
+            if valid_orders and not run_optimization and mode == "One Window" and "optimization_results" in st.session_state and st.session_state.optimization_results:
                 # Extract common data from session state
                 results = st.session_state.optimization_results
                 optimizations = results['optimizations']
@@ -3097,12 +3101,12 @@ Be concise but thorough. Focus on actionable insights."""
                             strategy_desc=opt['strategy'],
                             show_ai_explanations=False
                         )
-            # Display stored Full day results (when not running optimization but results exist in session state)
-            if valid_orders and not run_optimization and mode == "Full day" and 'full_day_results' in st.session_state and st.session_state.full_day_results:
+            # Display stored Multiple Windows results (when not running optimization but results exist in session state)
+            if valid_orders and not run_optimization and mode == "Multiple Windows" and 'full_day_results' in st.session_state and st.session_state.full_day_results:
                 try:
                     st.success("🎯 CACHED DISPLAY STARTED")
-                    st.info("📦 Displaying cached Full Day optimization results")
-                    st.markdown("## 🌅 Full Day Optimization")
+                    st.info("📦 Displaying cached Multiple Windows optimization results")
+                    st.markdown("## 🌅 Multiple Windows Optimization")
 
                     # Extract stored results
                     stored = st.session_state.full_day_results
@@ -3306,7 +3310,7 @@ Be concise but thorough. Focus on actionable insights."""
                         st.sidebar.write(f"**Debug:** validation_result type: {type(validation_result)}, value: {validation_result}")
 
                 except Exception as cache_error:
-                    st.error(f"❌ Error displaying cached Full Day results: {cache_error}")
+                    st.error(f"❌ Error displaying cached Multiple Windows results: {cache_error}")
                     import traceback
                     st.code(traceback.format_exc())
 
