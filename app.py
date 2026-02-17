@@ -2282,13 +2282,11 @@ def main():
                                 )
 
                 elif mode == "Multiple Windows":
-                    st.success("🔴 CHECKPOINT A: Multiple Windows mode started")
                     # MULTIPLE WINDOWS MODE: Allocate orders across windows, then optimize each window
                     st.markdown("## 🌅 Multiple Windows Optimization")
 
                     # Import allocator
                     from allocator import allocate_orders_across_windows, window_label
-                    st.success("🔴 CHECKPOINT B: After imports")
 
                     # Use updated window times if available (from editable table)
                     if 'updated_window_times' in st.session_state:
@@ -2333,7 +2331,6 @@ def main():
                         st.metric("Cancel recommended", len(allocation_result.cancel))
 
                     st.markdown("---")
-                    st.success("🔴 CHECKPOINT C: After allocation summary, starting per-window loop")
 
                     # Note: Movement Summary with per-window breakdown will be added after window_results are populated
                     # This placeholder reminds us where it will appear in the final display
@@ -2446,307 +2443,16 @@ def main():
                         'use_ai': st.session_state.get('use_ai', False)
                     }
 
-                    # PHASE 2: Display all results (AFTER loop completes - no more reruns)
-                    # Now iterate through window_results to display everything
-                    for win_label in window_labels_list:
-                        result = window_results.get(win_label)
-                        if not result:
-                            continue
-
-                        if result.get('empty'):
-                            with st.expander(f"**{win_label}** — No orders assigned", expanded=False):
-                                st.info("No orders were assigned to this window after allocation.")
-                            continue
-
-                        # Extract stored data
-                        keep = result['keep']
-                        early = result['early']
-                        reschedule = result['reschedule']
-                        cancel = result['cancel']
-                        win_geocoded = result['geocoded']
-                        win_addresses = result['addresses']
-                        win_time_matrix = result['time_matrix']
-                        win_service_times = result['service_times']
-                        win_capacity = result['capacity']
-                        win_duration = result['duration']
-                        route_time = result['route_time']
-                        win_orders = result['orders']
-
-                        with st.expander(f"**{win_label}** — {len(keep)} orders kept", expanded=True):
-                            # KPI Dashboard
-                            col1, col2, col3, col4 = st.columns(4)
-
-                            kept_units = sum(o['units'] for o in keep)
-                            capacity_pct = (kept_units / win_capacity * 100) if win_capacity > 0 else 0
-                            efficiency = (len(keep) / (route_time / 60)) if route_time > 0 else 0
-
-                            with col1:
-                                st.metric("Orders Kept", len(keep))
-                            with col2:
-                                st.metric("Capacity Used", f"{kept_units}/{win_capacity}",
-                                         delta=f"{capacity_pct:.0f}%")
-                            with col3:
-                                st.metric("Route Time", f"{route_time} min",
-                                         delta=f"{(route_time/win_duration*100):.0f}% of window")
-                            with col4:
-                                st.metric("Efficiency", f"{efficiency:.1f} orders/hr")
-
-                            # Individual window map
-                            st.markdown("#### 🗺️ Route Map")
-                            try:
-                                window_map = create_map_visualization(
-                                    keep=keep,
-                                    cancel=cancel,
-                                    early=early,
-                                    reschedule=reschedule,
-                                    geocoded=win_geocoded,
-                                    depot_address=depot_address,
-                                    valid_orders=win_orders,
-                                    addresses=win_addresses,
-                                    service_times=win_service_times
-                                )
-                                if window_map:
-                                    st_folium(window_map, width=None, height=400, key=f"map_{win_label}")
-                                else:
-                                    st.warning("⚠️ Could not create map for this window")
-                            except Exception as e:
-                                st.error(f"❌ Error creating window map: {str(e)}")
-
-                            # AI validation per window (if enabled)
-                            if config.is_ai_enabled():
-                                with st.spinner(f"🤖 AI analyzing {win_label}..."):
-                                    api_key = config.get_anthropic_api_key()
-                                    validation = chat_assistant.validate_optimization_results(
-                                        keep=keep,
-                                        early=early,
-                                        reschedule=reschedule,
-                                        cancel=cancel,
-                                        valid_orders=win_orders,
-                                        time_matrix=win_time_matrix,
-                                        service_times=win_service_times,
-                                        vehicle_capacity=win_capacity,
-                                        window_minutes=win_duration,
-                                        api_key=api_key
-                                    )
-                                    if validation:
-                                        st.info(f"🤖 **AI Analysis**: {validation}")
-
-                            # Display results
-                            st.markdown(f"**Route Summary**: {len(keep)} orders, {kept_units} units")
-
-                            # Show In Window orders
-                            if keep:
-                                st.markdown(f"#### ✅ In Window ({len(keep)} orders)")
-                                keep_data = []
-                                for k in sorted(keep, key=lambda x: x["sequence_index"]):
-                                    row = {"Seq": k["sequence_index"] + 1}
-                                    row.update(create_standard_row(k))
-                                    keep_data.append(row)
-                                keep_df = pd.DataFrame(keep_data)
-                                st.dataframe(keep_df, width='stretch')
-
-                            # Show Deliver Early orders
-                            if early:
-                                st.markdown(f"#### ⏰ Deliver Early ({len(early)} orders)")
-                                early_data = []
-                                for e in early:
-                                    row = create_standard_row(e)
-                                    early_data.append(row)
-                                early_df = pd.DataFrame(early_data)
-                                st.dataframe(early_df, width='stretch')
-
-                            # Show Reschedule orders
-                            if reschedule:
-                                st.markdown(f"#### 📅 Reschedule ({len(reschedule)} orders)")
-                                resc_data = []
-                                for r in reschedule:
-                                    row = create_standard_row(r)
-                                    resc_data.append(row)
-                                resc_df = pd.DataFrame(resc_data)
-                                st.dataframe(resc_df, width='stretch')
-
-                            # Show Cancel orders
-                            if cancel:
-                                st.markdown(f"#### ❌ Cancel ({len(cancel)} orders)")
-                                cancel_data = []
-                                for c in cancel:
-                                    row = create_standard_row(c)
-                                    cancel_data.append(row)
-                                cancel_df = pd.DataFrame(cancel_data)
-                                st.dataframe(cancel_df, width='stretch')
+                    # PHASE 2: No per-window display here - all display happens in cached section below
+                    # This prevents st_folium from triggering reruns that cause flashing
 
                     st.markdown("---")
-
-                    # Global Summary Map
-                    st.markdown("### 🗺️ Global Route Summary Map")
-                    st.markdown("All routes displayed together with color-coded windows")
-
-                    # Debug: Show number of window results
-                    st.info(f"🔍 Debug: Found {len(window_results)} window(s) with results")
-
-                    # Wrap entire map section to prevent auto-refresh on errors
-                    try:
-                        import folium
-                        from folium import plugins
-
-                        # Get depot coordinates from first window's geocoded data
-                        if not window_results:
-                            st.warning("No routes to display on map - window_results is empty")
-                        else:
-                            st.info(f"✅ Processing {len(window_results)} windows for map visualization")
-                            first_window = list(window_results.values())[0]
-
-                            # Debug: Check if geocoded data exists
-                            if 'geocoded' not in first_window:
-                                st.error("❌ No 'geocoded' key in window results")
-                            else:
-                                st.success(f"✅ Found geocoded data with {len(first_window['geocoded'])} entries")
-
-                            depot_geo = first_window['geocoded'][0] if first_window.get('geocoded') else None
-
-                            if depot_geo is None:
-                                st.warning("⚠️ Depot location is None. Cannot display map.")
-                            elif depot_geo.get("lat") is None:
-                                st.warning(f"⚠️ Depot location has no latitude. Data: {depot_geo}")
-                            else:
-                                st.success(f"✅ Depot located at ({depot_geo['lat']}, {depot_geo['lng']})")
-                                # Define distinct colors for each window
-                                route_colors = [
-                                    '#FF0000',  # Red
-                                    '#0000FF',  # Blue
-                                    '#00FF00',  # Green
-                                    '#FF00FF',  # Magenta
-                                    '#FFA500',  # Orange
-                                    '#800080',  # Purple
-                                    '#00FFFF',  # Cyan
-                                    '#FFD700',  # Gold
-                                ]
-
-                                # Calculate map center from all routes
-                                all_lats = [depot_geo["lat"]]
-                                all_lons = [depot_geo["lng"]]
-
-                                for win_label, result in window_results.items():
-                                    win_geocoded = result.get('geocoded', [])
-                                    for order in result['keep']:
-                                        if 'node' in order:
-                                            node_idx = order['node']
-                                            if 0 <= node_idx < len(win_geocoded):
-                                                geo = win_geocoded[node_idx]
-                                                if geo.get("lat") is not None:
-                                                    all_lats.append(geo["lat"])
-                                                    all_lons.append(geo["lng"])
-
-                                if len(all_lats) > 1:
-                                    center_lat = sum(all_lats) / len(all_lats)
-                                    center_lon = sum(all_lons) / len(all_lons)
-
-                                    # Create map
-                                    global_map = folium.Map(
-                                        location=[center_lat, center_lon],
-                                        zoom_start=11,
-                                        tiles='OpenStreetMap'
-                                    )
-
-                                    # Add depot marker
-                                    folium.Marker(
-                                        location=[depot_geo["lat"], depot_geo["lng"]],
-                                        popup=f"<b>Depot</b><br>{depot_address}",
-                                        icon=folium.Icon(color='blue', icon='home', prefix='fa'),
-                                        tooltip="Fulfillment Location"
-                                    ).add_to(global_map)
-
-                                    # Plot each window's route with different color
-                                    for idx, (win_label, result) in enumerate(window_results.items()):
-                                        color = route_colors[idx % len(route_colors)]
-                                        keep_orders = result['keep']
-                                        win_geocoded_data = result.get('geocoded', [])
-
-                                        if keep_orders and win_geocoded_data:
-                                            # Sort by sequence
-                                            sorted_orders = sorted(keep_orders, key=lambda x: x.get('sequence_index', 0))
-
-                                            # Add markers for each stop
-                                            for i, order in enumerate(sorted_orders):
-                                                if 'node' in order:
-                                                    node_idx = order['node']
-                                                    if 0 <= node_idx < len(win_geocoded_data):
-                                                        geo = win_geocoded_data[node_idx]
-                                                        if geo.get("lat") is not None:
-                                                            popup_html = f"""
-                                                            <b>Window: {win_label}</b><br>
-                                                            Stop #{i+1}<br>
-                                                            Order: {order.get('order_id', 'N/A')}<br>
-                                                            Customer: {order.get('customer_name', 'N/A')}<br>
-                                                            Units: {order.get('units', 'N/A')}
-                                                            """
-
-                                                            folium.CircleMarker(
-                                                                location=[geo["lat"], geo["lng"]],
-                                                                radius=8,
-                                                                popup=folium.Popup(popup_html, max_width=300),
-                                                                color=color,
-                                                                fill=True,
-                                                                fillColor=color,
-                                                                fillOpacity=0.7,
-                                                                weight=2,
-                                                                tooltip=f"{win_label}: Stop {i+1}"
-                                                            ).add_to(global_map)
-
-                                            # Draw route lines connecting stops
-                                            route_coords = [[depot_geo["lat"], depot_geo["lng"]]]  # Start at depot
-                                            for order in sorted_orders:
-                                                if 'node' in order:
-                                                    node_idx = order['node']
-                                                    if 0 <= node_idx < len(win_geocoded_data):
-                                                        geo = win_geocoded_data[node_idx]
-                                                        if geo.get("lat") is not None:
-                                                            route_coords.append([geo["lat"], geo["lng"]])
-                                            route_coords.append([depot_geo["lat"], depot_geo["lng"]])  # Return to depot
-
-                                            # Add route line
-                                            folium.PolyLine(
-                                                locations=route_coords,
-                                                color=color,
-                                                weight=3,
-                                                opacity=0.7,
-                                                popup=f"Route: {win_label}",
-                                                tooltip=f"{win_label} - {len(sorted_orders)} stops"
-                                            ).add_to(global_map)
-
-                                    # Add legend
-                                    legend_html = '<div style="position: fixed; bottom: 50px; left: 50px; z-index: 1000; background-color: white; padding: 10px; border: 2px solid grey; border-radius: 5px;">'
-                                    legend_html += '<h4 style="margin: 0 0 10px 0;">Routes by Window</h4>'
-                                    for idx, win_label in enumerate(window_results.keys()):
-                                        color = route_colors[idx % len(route_colors)]
-                                        legend_html += f'<p style="margin: 5px;"><span style="background-color: {color}; width: 20px; height: 10px; display: inline-block; margin-right: 5px;"></span>{win_label}</p>'
-                                    legend_html += '</div>'
-                                    global_map.get_root().html.add_child(folium.Element(legend_html))
-
-                                    # Display map
-                                    st_folium(global_map, width=None, height=600)
-
-                                    st.caption("🎨 Each color represents a different delivery window route")
-                                else:
-                                    st.info("No route data available for map visualization")
-                    except Exception as e:
-                        import traceback
-                        st.error(f"❌ Error creating global map: {str(e)}")
-                        with st.expander("🐛 Debug: Full error details"):
-                            st.code(traceback.format_exc())
-                        st.info("💡 Map visualization requires valid geocoded addresses")
-
-                    # Ensure this section completes without issues
-                    st.success("✅ Map section completed")
-
-                    st.markdown("---")
-                    st.success("🟢 CHECKPOINT 1: After map, before allocation details")
 
                     # Movement Summary
                     st.markdown("### 📊 Movement Summary")
 
-                    # Calculate totals
-                    total_in_window = sum(result['orders_kept'] for result in window_results.values())
+                    # Calculate totals (handle empty windows)
+                    total_in_window = sum(result.get('orders_kept', 0) for result in window_results.values() if not result.get('empty', False))
                     total_delivered_early = len(allocation_result.moved_early)
                     total_rescheduled = len(allocation_result.reschedule)
                     total_cancelled = len(allocation_result.cancel)
@@ -2766,6 +2472,7 @@ def main():
 
                     # Per-window breakdown table
                     st.markdown("#### Movement by Window")
+
                     window_breakdown = []
                     for win_label, result in window_results.items():
                         # Skip empty windows
@@ -2789,8 +2496,6 @@ def main():
                     if window_breakdown:
                         breakdown_df = pd.DataFrame(window_breakdown)
                         st.dataframe(breakdown_df, width='stretch')
-                    else:
-                        st.info("No window data available for breakdown table")
 
                     st.markdown("---")
 
@@ -2831,8 +2536,6 @@ def main():
                             cancel_df = pd.DataFrame(cancel_data)
                             st.dataframe(cancel_df, width='stretch')
 
-                    st.success("🟢 CHECKPOINT 2: After allocation details, before AI validation")
-
                     # AI VALIDATION FOR FULL DAY MODE
                     st.markdown("---")
                     st.markdown("### 🤖 AI Validation & Analysis")
@@ -2846,7 +2549,6 @@ def main():
 
                     # Use stored AI preference from session state (not button state, which resets after rerun)
                     should_use_ai = st.session_state.get('use_ai', False)
-                    st.info(f"🔍 Debug: ai_available={ai_available}, should_use_ai={should_use_ai}, run_with_ai={run_with_ai}")
 
                     if ai_available and should_use_ai:
                         with st.spinner("🤖 AI analyzing full day allocation and routes..."):
@@ -2944,7 +2646,6 @@ Be concise but thorough. Focus on actionable insights."""
                     else:
                         st.info("💡 Enable AI (via ANTHROPIC_API_KEY in .env) to get intelligent validation of full day allocation")
 
-                    st.success("🟢 CHECKPOINT 3: After AI section, updating session state with AI result")
 
                     # Update session state with AI validation result
                     # (Full data was already stored early, we're just adding the AI result now)
@@ -2958,16 +2659,6 @@ Be concise but thorough. Focus on actionable insights."""
                     except Exception as update_error:
                         st.error(f"❌ ERROR UPDATING AI IN SESSION STATE: {update_error}")
 
-            # Debug: Check conditions for cached display
-            if not run_optimization:
-                st.sidebar.markdown("---")
-                st.sidebar.markdown("**🔍 Debug Info:**")
-                st.sidebar.write(f"• valid_orders: {len(valid_orders) if valid_orders else 0} orders")
-                st.sidebar.write(f"• run_optimization: {run_optimization}")
-                st.sidebar.write(f"• mode: {mode}")
-                st.sidebar.write(f"• full_day_results in session: {'full_day_results' in st.session_state}")
-                if 'full_day_results' in st.session_state:
-                    st.sidebar.write(f"• full_day_results is not None: {st.session_state.full_day_results is not None}")
 
             # Display stored One Window results (when not running optimization but results exist in session state)
             if valid_orders and not run_optimization and mode == "One Window" and "optimization_results" in st.session_state and st.session_state.optimization_results:
@@ -3086,15 +2777,12 @@ Be concise but thorough. Focus on actionable insights."""
                             show_ai_explanations=False
                         )
             # Display stored Multiple Windows results (when not running optimization but results exist in session state)
-            if valid_orders and not run_optimization and mode == "Multiple Windows" and 'full_day_results' in st.session_state and st.session_state.full_day_results:
+            if valid_orders and mode == "Multiple Windows" and 'full_day_results' in st.session_state and st.session_state.full_day_results:
                 try:
-                    st.success("🎯 CACHED DISPLAY STARTED")
-                    st.info("📦 Displaying cached Multiple Windows optimization results")
                     st.markdown("## 🌅 Multiple Windows Optimization")
 
                     # Extract stored results
                     stored = st.session_state.full_day_results
-                    st.write(f"Debug: stored keys = {stored.keys() if isinstance(stored, dict) else 'NOT A DICT'}")
 
                     # Extract all needed data from session state
                     window_results = stored['window_results']
@@ -3119,6 +2807,96 @@ Be concise but thorough. Focus on actionable insights."""
 
                     st.markdown("---")
 
+                    # Movement Summary
+                    st.markdown("### 📊 Movement Summary")
+
+                    # Calculate totals (handle empty windows)
+                    total_in_window = sum(result.get('orders_kept', 0) for result in window_results.values() if not result.get('empty', False))
+                    total_delivered_early = len(allocation_result.moved_early)
+                    total_rescheduled = len(allocation_result.reschedule)
+                    total_cancelled = len(allocation_result.cancel)
+
+                    # Display summary in columns
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("✅ In Window", total_in_window)
+                    with col2:
+                        st.metric("⏰ Deliver Early", total_delivered_early)
+                    with col3:
+                        st.metric("📅 Reschedule", total_rescheduled)
+                    with col4:
+                        st.metric("❌ Cancel", total_cancelled)
+
+                    st.markdown("---")
+
+                    # Per-window breakdown table
+                    st.markdown("#### Movement by Window")
+
+                    window_breakdown = []
+                    for win_label, result in window_results.items():
+                        # Skip empty windows
+                        if result.get('empty', False):
+                            continue
+
+                        # Count orders that originated in this window
+                        moved_early_count = len([a for a in allocation_result.moved_early if a.original_window == win_label])
+                        rescheduled_count = len([a for a in allocation_result.reschedule if a.original_window == win_label])
+                        cancelled_count = len([a for a in allocation_result.cancel if a.original_window == win_label])
+                        in_window_count = result.get('orders_kept', 0)
+
+                        window_breakdown.append({
+                            "Window": win_label,
+                            "In Window": in_window_count,
+                            "Deliver Early": moved_early_count,
+                            "Reschedule": rescheduled_count,
+                            "Cancel": cancelled_count
+                        })
+
+                    if window_breakdown:
+                        breakdown_df = pd.DataFrame(window_breakdown)
+                        st.dataframe(breakdown_df, width='stretch')
+
+                    st.markdown("---")
+
+                    # Global collapsible sections for movement details
+                    if allocation_result.moved_early:
+                        with st.expander(f"⏰ Deliver Early ({len(allocation_result.moved_early)} orders)", expanded=False):
+                            moved_data = []
+                            for a in allocation_result.moved_early:
+                                row = create_standard_row(a.order)
+                                row["From Window"] = a.original_window
+                                row["To Window"] = a.assigned_window
+                                row["Reason"] = a.reason
+                                moved_data.append(row)
+                            moved_df = pd.DataFrame(moved_data)
+                            st.dataframe(moved_df, width='stretch')
+
+                    if allocation_result.reschedule:
+                        with st.expander(f"📅 Reschedule ({len(allocation_result.reschedule)} orders)", expanded=False):
+                            resc_data = []
+                            for a in allocation_result.reschedule:
+                                row = create_standard_row(a.order)
+                                row["Original Window"] = a.original_window
+                                row["Reschedule Count"] = a.order.get("priorRescheduleCount", 0) or 0
+                                row["Reason"] = a.reason
+                                resc_data.append(row)
+                            resc_df = pd.DataFrame(resc_data)
+                            st.dataframe(resc_df, width='stretch')
+
+                    if allocation_result.cancel:
+                        with st.expander(f"❌ Cancel ({len(allocation_result.cancel)} orders)", expanded=False):
+                            cancel_data = []
+                            for a in allocation_result.cancel:
+                                row = create_standard_row(a.order)
+                                row["Original Window"] = a.original_window
+                                row["Reschedule Count"] = a.order.get("priorRescheduleCount", 0) or 0
+                                row["Reason"] = a.reason
+                                cancel_data.append(row)
+                            cancel_df = pd.DataFrame(cancel_data)
+                            st.dataframe(cancel_df, width='stretch')
+
+                    st.markdown("---")
+
                     # Show per-window results
                     st.markdown("### 🚛 Per-Window Optimization Results")
 
@@ -3135,7 +2913,27 @@ Be concise but thorough. Focus on actionable insights."""
                             from allocator import window_duration_minutes
                             win_duration = window_duration_minutes(win_start, win_end)
 
-                            st.markdown(f"**Route Summary**: {result['orders_kept']} orders, {result['total_units']} units")
+                            # KPI Dashboard
+                            col1, col2, col3, col4 = st.columns(4)
+
+                            win_capacity = window_capacities.get(win_label, 0)
+                            kept_units = result['total_units']
+                            route_time = result.get('route_time', 0)
+                            capacity_pct = (kept_units / win_capacity * 100) if win_capacity > 0 else 0
+                            efficiency = (result['orders_kept'] / (route_time / 60)) if route_time > 0 else 0
+
+                            with col1:
+                                st.metric("Orders Kept", result['orders_kept'])
+                            with col2:
+                                st.metric("Capacity Used", f"{kept_units}/{win_capacity}",
+                                         delta=f"{capacity_pct:.0f}%")
+                            with col3:
+                                st.metric("Route Time", f"{route_time} min",
+                                         delta=f"{(route_time/win_duration*100):.0f}% of window")
+                            with col4:
+                                st.metric("Efficiency", f"{efficiency:.1f} orders/hr")
+
+                            st.markdown(f"**Route Summary**: {result['orders_kept']} orders, {kept_units} units")
 
                             # Show In Window orders (all orders on route in this window)
                             if result['keep']:
@@ -3223,7 +3021,7 @@ Be concise but thorough. Focus on actionable insights."""
                                 )
 
                                 if global_map:
-                                    st_folium(global_map, width=None, height=600)
+                                    st_folium(global_map, width=None, height=600, key="global_map")
                                     st.caption("🎨 Each color represents a different delivery window route. Routes show actual Google Maps road paths with numbered stops.")
                                 else:
                                     st.warning("⚠️ Could not create map. Check that geocoding completed successfully.")
