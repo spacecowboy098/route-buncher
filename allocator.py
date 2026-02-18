@@ -25,7 +25,8 @@ class AllocationResult:
     """Complete allocation results for all orders across all windows."""
     kept_in_window: List[OrderAllocation]  # Orders staying in original window
     moved_early: List[OrderAllocation]  # Orders moved to earlier window
-    reschedule: List[OrderAllocation]  # Orders that should be rescheduled
+    moved_later: List[OrderAllocation]  # Orders moved to a later window (overflow rescue)
+    reschedule: List[OrderAllocation]  # Orders that should be rescheduled (no window fit)
     cancel: List[OrderAllocation]  # Orders recommended for cancellation
     orders_by_window: Dict[str, List[dict]]  # {window_label: [order dicts]}
 
@@ -279,21 +280,19 @@ def allocate_orders_across_windows(
             )
             kept_in_window.append(allocation)
 
-    # Pass 4: Handle overflow - reschedule or cancel based on reschedule_count
-    # Sort by units descending (largest orders first - these should be dropped)
+    # Pass 4: Identify overflow orders and apply size-based hard filters
+    # Sort by units descending (largest orders first)
     unassigned_orders.sort(key=lambda o: o['units'], reverse=True)
+
+    # overflow_orders: normal-sized orders that didn't fit their original window → try later windows in Pass 5
+    overflow_orders = []
 
     for order in unassigned_orders:
         orig_window = window_label(order['delivery_window_start'], order['delivery_window_end'])
         units = order['units']
-        reschedule_count = order.get('priorRescheduleCount', 0) or 0  # Handle None/empty
 
-        if isinstance(reschedule_count, str):
-            reschedule_count = int(reschedule_count) if reschedule_count.strip() else 0
-
-        # SIZE-BASED THRESHOLDS (priority over reschedule_count)
+        # SIZE-BASED THRESHOLDS: hard filter, never try later windows for these
         if units > cancel_threshold:
-            # Large order → auto-cancel
             allocation = OrderAllocation(
                 order=order,
                 original_window=orig_window,
@@ -303,7 +302,6 @@ def allocate_orders_across_windows(
             )
             cancel.append(allocation)
         elif units > reschedule_threshold:
-            # Medium-large order → auto-reschedule
             allocation = OrderAllocation(
                 order=order,
                 original_window=orig_window,
@@ -312,31 +310,74 @@ def allocate_orders_across_windows(
                 reason=f"Does not fit {orig_window} — {units} units exceeds reschedule threshold ({reschedule_threshold}) — reschedule to different day"
             )
             reschedule.append(allocation)
-        # RESCHEDULE_COUNT LOGIC (for normal-sized orders)
-        elif reschedule_count >= 2:
-            # Already rescheduled multiple times → cancel
-            allocation = OrderAllocation(
-                order=order,
-                original_window=orig_window,
-                assigned_window=None,
-                decision="CANCEL_RECOMMENDED",
-                reason=f"Does not fit {orig_window} — already rescheduled {reschedule_count} times — recommend cancel"
-            )
-            cancel.append(allocation)
         else:
-            # First reschedule for normal-sized order
-            allocation = OrderAllocation(
-                order=order,
-                original_window=orig_window,
-                assigned_window=None,
-                decision="RESCHEDULE",
-                reason=f"Does not fit {orig_window} — {units} units, capacity full — reschedule count: {reschedule_count}"
-            )
-            reschedule.append(allocation)
+            # Normal-sized order that overflowed → try later windows in Pass 5
+            overflow_orders.append(order)
+
+    # Pass 5: Rescue overflow orders into later windows
+    # For each overflow order, try every later window in chronological order.
+    # Capacity check only — the per-window optimizer handles geographic fit.
+    moved_later = []
+
+    # Sort window_labels by start time so we iterate chronologically
+    sorted_window_items = sorted(window_labels.items(), key=lambda x: x[1][0])
+
+    for order in overflow_orders:
+        orig_window = window_label(order['delivery_window_start'], order['delivery_window_end'])
+        orig_start = order['delivery_window_start']
+        units = order['units']
+        reschedule_count = order.get('priorRescheduleCount', 0) or 0
+
+        if isinstance(reschedule_count, str):
+            reschedule_count = int(reschedule_count) if reschedule_count.strip() else 0
+
+        rescued = False
+        for label, (win_start, win_end) in sorted_window_items:
+            # Only try windows that START AFTER the original window
+            if win_start <= orig_start:
+                continue
+
+            # Check capacity
+            if remaining_capacity.get(label, 0) >= units:
+                remaining_capacity[label] -= units
+                assigned_orders[label].append(order)
+
+                allocation = OrderAllocation(
+                    order=order,
+                    original_window=orig_window,
+                    assigned_window=label,
+                    decision="MOVED_LATER_WINDOW",
+                    reason=f"Overflow from {orig_window} — moved to {label} (capacity available; route fit confirmed after optimization)"
+                )
+                moved_later.append(allocation)
+                rescued = True
+                break
+
+        if not rescued:
+            # No later window had capacity — apply reschedule count logic
+            if reschedule_count >= 2:
+                allocation = OrderAllocation(
+                    order=order,
+                    original_window=orig_window,
+                    assigned_window=None,
+                    decision="CANCEL_RECOMMENDED",
+                    reason=f"Does not fit any window today — already rescheduled {reschedule_count} times — recommend cancel"
+                )
+                cancel.append(allocation)
+            else:
+                allocation = OrderAllocation(
+                    order=order,
+                    original_window=orig_window,
+                    assigned_window=None,
+                    decision="RESCHEDULE",
+                    reason=f"No available capacity in any later window today — reschedule to new day (reschedule count: {reschedule_count})"
+                )
+                reschedule.append(allocation)
 
     return AllocationResult(
         kept_in_window=kept_in_window,
         moved_early=moved_early,
+        moved_later=moved_later,
         reschedule=reschedule,
         cancel=cancel,
         orders_by_window=assigned_orders
