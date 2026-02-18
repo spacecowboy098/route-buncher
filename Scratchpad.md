@@ -1,17 +1,24 @@
 Scratchpad
 
-I want to clean up the loading indicators, debug messages, and status messages across the UX, right now these show up in various places and clutter the UX with unecessary messages for dispatchers. I'm thinking of first cleaning these up, second moving any REQUIRED debug or status messages into a new AI chat section that should be standardized for both the One WIndow and Multiple Window optimization modes, and outputting loading information and AI messages in that window. I envision this living in the side bar after run optimization is hit the chat will take up the the majority of the side bar collapsing into a Buncher Workflow section so the dispatcher can chat with the assitatnt to understand why the optimizer and buncher made certain decisions and provide reccomendations that the dispatcher should think through for final dispatch use askuserquestion tool
-
+❯ im checking the algorithim with a route that has less capacity in one window then the subsequent window, instead of the orders being moved into the
+  next available window that makes sense, the orders were identified for reschedule, but not actually placed into that route, for each per window 
+  optimization result, we should have KEEP (which is the original orders on that route), ADD (which are orders that have been moved into that route),  
+  RESCHEDULE (which shoudl be orders that have been moved out of that route) and CANCEL (which should be orders that have been cancelled) help me 
+  think through how to make sure this is easy to understand for dispatchers, use askuserquestion tool      
 
 
 4) We should clean up the debug messages across the entire UX, remove unecessary messages and improve the input heierachy, help me think through what could be improved here
+
+3) remove early delivery table (and reschedule if present) and combine with do not delivery in this window (with action deliver early, or reschedule) similar to what we did in multi window one window optimization
+
+4) make sure the table columns match the import i.e. earlyEligible vs early_delivery_ok.
+
+3) I'm not seeing metrics for each of the windows like I do when i run single window when. I run multiple window I should be seeing Orders, Capacity Used, Route Time, Deliveres/Hour, Route Miles for each route, and there should also be global metrics like, Total Orders Delivered (across all routes), Capacity Used (across all routes), Total Route Time (across all routes), Deliveres/Hour (average across all routes), Route Miles (across all routes)
 
 2) I want to consolidate the UX for the AI chat, and think we could move it into the sidebar, the AI results will be beside the output of the system and can be easily accessed, this should be the case for both single window and multi window optimizaitons, mutli window ai should be functioning very similar to the single window AI, can you help me think through this?
 
 - Rename Reason to Assitant Reason and reorder in global allocation table to be right after numberOfUnits and before runId
 
-UPDATE CLAUDE MD FILES
-REFACTOR CODE WHEREVER OPPORTUNITY EXSISTS
 
 # v3 Optimization Modes - have two modes for full day optimization, Post-Mortem, Live
   - Post Mortem mode will allow operations to validate a days worth of dispatched orders, the goal here is to identify areas for improvement and provide suggestions on how the day could have been differently optimized
@@ -30,102 +37,13 @@ REFACTOR CODE WHEREVER OPPORTUNITY EXSISTS
         203 -✅ Changes you make with tools are IMMEDIATELY applied to the Dispatcher Sandbox                                                     
         204 -✅ Users can see updated map and metrics after you make changes       
 
-
-
-# Changes 2/18
-If an order is pushed later or rescheduled because the optimized route no longer has enough time for that order, the reason should clearly reflect that, upon testing a 29 unit order was pushed out of an earlier window to a later window even though the route had enough capacity im assuming this is because of a time constraint
-
-Here is the specific example, 
-
-Original Import
-0	1298780411	366fd945-e484-4e85-97b7-278b2ee1a0b8	1369 Fort St 48146 Lincoln Park	14	false	09:00 AM 11:00 AM
-1	1298765985	53903f8b-2f7c-4706-8c95-8314c4de8b47	23611 Crestview St 48124 Dearborn	29	false	09:00 AM 11:00 AM
-2	1298734598	61ac9b93-c38b-4a9b-90b9-7c6b785b853a	6178 Gulley St 48180 Taylor	2	false	09:00 AM 11:00 AM
-3	1298795986	05240c2f-d154-4487-89cb-bf3b99e08472	14837 Arlington Ave 48101 Allen Park	12	false	09:00 AM 11:00 AM
-4	1298816388	4c12eadf-02d4-4910-bdf0-bd51dc4ebffd	23800 Crisler St 48180 Taylor	10	false	09:00 AM 11:00 AM
-5	1298769410	f2b90399-d59d-4fbc-8732-2ddb8beef404	3130 Alice St 48124 Dearborn	11	false	09:00 AM 11:00 AM
-6	1298669048	ac97a8f4-62ee-4f25-b353-1860a9ffaf9d	14919 Belmont Ave 48101 Allen Park	37	true	09:00 AM 11:00 AM
-7	1298812505	515f2ca3-b48b-4cd5-bb5c-cea9f38d6a32	3522 Linden Street 48124 Dearborn	26	true	09:00 AM 11:00 AM
-8	1298806623	647bb407-f254-4d70-b5c2-cf2e868c2c6e	24874 Woodcroft Dr 48124 Dearborn	5	true	10:00 AM 12:00 PM
-9	1298741192	6e3eac0f-91c6-4cc3-a613-18157b5f3756	20651 W Warren St 48127 Dearborn Heights	50	false	10:00 AM 12:00 PM
-10	1298727272	4e3e9d62-fb56-46ff-a86f-6bb21961d7d4	15270 S Plaza Dr Apt 314 48180 Taylor	77	false	10:00 AM 12:00 PM
-11	1298753703	6d930d58-f08d-4167-8e6a-1bf04fbc8f96	8045 Syracuse Street 48180 Taylor	24	false	10:00 AM 12:00 PM
-12	1298744896	dc6448ee-f024-4bb1-a9c7-376153cf7a43	12096 Hemingway 48239 Redford	59	false	10:00 AM 12:00 PM
-
-
-Optimized 9-11 route
-0	1	1298780411	366fd945-e484-4e85-97b7-278b2ee1a0b8	1369 Fort St 48146 Lincoln Park	+27 min	3 min	🏠 Original	Fits in original window
-1	2	1298806623	647bb407-f254-4d70-b5c2-cf2e868c2c6e	24874 Woodcroft Dr 48124 Dearborn	+46 min	2 min	⏰ Moved Early	Early delivery — moved from 10:00 AM - 12:00 PM to 09:00 AM - 11:00 AM (capacity available)
-2	3	1298734598	61ac9b93-c38b-4a9b-90b9-7c6b785b853a	6178 Gulley St 48180 Taylor	+62 min	2 min	🏠 Original	Fits in original window
-3	4	1298795986	05240c2f-d154-4487-89cb-bf3b99e08472	14837 Arlington Ave 48101 Allen Park	+75 min	3 min	🏠 Original	Fits in original window
-4	5	1298669048	ac97a8f4-62ee-4f25-b353-1860a9ffaf9d	14919 Belmont Ave 48101 Allen Park	+89 min	7 min	🏠 Original	Fits in original window
-
-Optimized 10-12 window
-0	1	1298727272	4e3e9d62-fb56-46ff-a86f-6bb21961d7d4	15270 S Plaza Dr Apt 314 48180 Taylor	+2 min	7 min	🏠 Original	Large order (77 units) — kept in original window (remaining capacity after all higher-priority orders placed)
-1	2	1298744896	dc6448ee-f024-4bb1-a9c7-376153cf7a43	12096 Hemingway 48239 Redford	+25 min	7 min	🏠 Original	Large order (59 units) — kept in original window (remaining capacity after all higher-priority orders placed)
-2	3	1298753703	6d930d58-f08d-4167-8e6a-1bf04fbc8f96	8045 Syracuse Street 48180 Taylor	+35 min	4 min	🏠 Original	Fits in original window
-3	4	1298741192	6e3eac0f-91c6-4cc3-a613-18157b5f3756	20651 W Warren St 48127 Dearborn Heights	+61 min	7 min	🏠 Original	Large order (50 units) — kept in original window (remaining capacity after all higher-priority orders placed)
-4	5	1298765985	53903f8b-2f7c-4706-8c95-8314c4de8b47	23611 Crestview St 48124 Dearborn	+89 min	5 min	⏩ Pushed Later	Overflow from 09:00 AM - 11:00 AM → placed in 10:00 AM - 12:00 PM ✓
-
-not sure why 1298765985 was pushed. if the prior route had capacity for it, we should try to keep orders in their original window as much as possible verify the logic here and help me understand why, if the reason was time we should make sure the reason reflects that as overflow isn't enough if capacity is suffecient
-
-(DONE) Can we add reason to all rows after the origin column and keep it after number of units in all the movement by window tables 
-
-The Map should show all reschedule orders for next day 
-
-(DONE) I want to slighltly tweak the logic for auto reschedule, if an order is above the auto reschedule threshold but below auto cancel, and has not exceeded 2 prior reschedules, we should try to find a spot for in later in the day if a spot exsists and there are no smaller orders that can fit in the window that make sense on the route. typicaly this means that these orders fall later in the day if capacity is available. )
-
-(DONE) Can we resctructure the multuple windows optimization, first map (then collapsable AI validation) then movement by window, then per window optimization results,
-
-(DONE) One window optimization has est service time and est arrival logic, can we add these to multiple window in the per window optimization tables? lets also reorder the table, seq, order id, custoemr id, address, est arrival time, service time, origin, customer tag, units, early, window can you also make sure service time logic is being handled correctly in the optimization calculation and that service time is visibile in the per window optimization kpis? Use ask user question tool 
-
-(DONE) It seems that even if an order is above the auto reschedule threshold but below cancellation and the window has space, it is being suggested to reschedule to a later day vs being kept in the same window. orders above the auto reschedule should be given last preference for slots on a route, if the window itself is the late route (as it is in this case) or no early eligible deliveries are available that woudl take up the excess capcity, we should keep the orders where they are as long as the route makes sense, use askuserquestiontool
-
-(DONE) ❯ im checking the algorithim with a route that has less capacity in one window then the subsequent window, instead of the orders being moved into the
-  next available window that makes sense, the orders were identified for reschedule, but not actually placed into that route, think through how to make sure this is easy to understand for dispatchers, and how we can update the logic to ensure orders can be rescheduled into later windows (and also make sure we know which window it moved into on the table ) use askuserquestion tool      
-  
-after basic capacity optimizations are done, the tool should look at making sure the most 
- 
-(DONE) Make sure the table columns match the import i.e. earlyEligible vs early_delivery_ok.
-
-(DONE) I'm not seeing metrics for each of the windows like I do when i run single window when. I run multiple window I should be seeing Orders, Capacity Used, Route Time, Deliveres/Hour, Route Miles for each route, and there should also be global metrics like, Total Orders Delivered (across all routes), Capacity Used (across all routes), Total Route Time (across all routes), Deliveres/Hour (average across all routes), Route Miles (across all routes)
-
-(DONE) Can we keep configure capacity by window above the horizontal line below order preview? when the optimization runs it should collapse like order preview does to keep things clean as after optimization runs the capacity cannot be configured
- 
-(DONE) Can we add a breakdown by movement type, Deliver Early, Reschedule, Cancel which specific orders belong to each? this should live below movement by window and have the total number of orders in that type in brackets in collapsable header i.e. Deliver Early (6) use ask user question tool
-
-(DONE) Dont need the UX to say Route Optimizer and Route optimization this is unecessary UX consider simplifying this use ask user question tool 
-
-(DONE) We can remove the additional movement details by type header, this can live underneath "totals in parentheses reflect all windows..."
-
-(DONE) There seems to be a logic issue somewhere, I uploaded a Csv with 8 orders in a window, the optimizer only kept 7 of the original orders and recieved 1 so the optimized total is 8 but given the original route had 8, it is unclear where that extra order went, it should have 9 orders total on the route, also the movement by window shows 7 orders were kept but the per window says 6 and orders added (should say recieved) says 1) the window table on route shows 7 orders. the original total is also not correct, as it should only be pulling the imported window values, recheck how we are pulling these values and confirm the logic with me, use askuserquestion tool
-
-(DONE) The original total is still wrong, this should just show the values from orders column in the above table, why is this happening? please fix and check if there are any deeper logic issues. 
-
-(DONE) That issue is now fixed, now there seems to be a seperate issue, 
-
-(DONE) In the per-window optimization table the title says 7 orders on route, the orders kept and recieved also add up 6+1 but the route summary says 7+1 which equals 8, upon looking further the optimizer completley ignored a 29 unit order, i'm wondering if there is some issue in the logic, for this window the optimizer should have kept all 8 orders in the window and one window order should have been delivered early making the total on route 9 here is the csv of the orders 
-
-1298780411	366fd945-e484-4e85-97b7-278b2ee1a0b8	1369 Fort St 48146 Lincoln Park	14	false	09:00 AM 11:00 AM	3d9d977a-7fcc-4e31-bba2-b0968252c80f	69,593	delivered	power	12-Feb-26	Lincoln Park - 208	Detroit	3710 Dix Hwy Lincoln Park, MI 48146	February 12, 2026, 5:58 AM	
-1298765985	53903f8b-2f7c-4706-8c95-8314c4de8b47	23611 Crestview St 48124 Dearborn	29	false	09:00 AM 11:00 AM	f7518ce8-9587-4bd0-b19a-ef9eee38909a	69,593	delivered	new	12-Feb-26	Lincoln Park - 208	Detroit	3710 Dix Hwy Lincoln Park, MI 48146	February 12, 2026, 5:58 AM	
-1298734598	61ac9b93-c38b-4a9b-90b9-7c6b785b853a	6178 Gulley St 48180 Taylor	2	false	09:00 AM 11:00 AM	5e913829-b3cd-457e-b5df-d99e1c33b023	69,593	delivered	unsatisfied	12-Feb-26	Lincoln Park - 208	Detroit	3710 Dix Hwy Lincoln Park, MI 48146	February 12, 2026, 5:58 AM	1
-1298795986	05240c2f-d154-4487-89cb-bf3b99e08472	14837 Arlington Ave 48101 Allen Park	12	false	09:00 AM 11:00 AM	f738dbb7-1314-4675-ae08-481801cdbc42	69,593	delivered	unsatisfied	12-Feb-26	Lincoln Park - 208	Detroit	3710 Dix Hwy Lincoln Park, MI 48146	February 12, 2026, 5:58 AM	
-1298816388	4c12eadf-02d4-4910-bdf0-bd51dc4ebffd	23800 Crisler St 48180 Taylor	10	false	09:00 AM 11:00 AM	f6ad515d-eeb7-4e4e-b93d-58afa0690534	69,593	delivered	new	12-Feb-26	Lincoln Park - 208	Detroit	3710 Dix Hwy Lincoln Park, MI 48146	February 12, 2026, 5:58 AM	
-1298769410	f2b90399-d59d-4fbc-8732-2ddb8beef404	3130 Alice St 48124 Dearborn	11	false	09:00 AM 11:00 AM	56b9ffa8-6da9-4995-97ad-7575d08d4b23	69,593	delivered	unsatisfied	12-Feb-26	Lincoln Park - 208	Detroit	3710 Dix Hwy Lincoln Park, MI 48146	February 12, 2026, 5:58 AM	
-1298669048	ac97a8f4-62ee-4f25-b353-1860a9ffaf9d	14919 Belmont Ave 48101 Allen Park	37	true	09:00 AM 11:00 AM	30eafc52-4559-4b1b-86bc-763fe9a72591	69,593	delivered	unsatisfied	12-Feb-26	Lincoln Park - 208	Detroit	3710 Dix Hwy Lincoln Park, MI 48146	February 12, 2026, 5:58 AM	
-1298812505	515f2ca3-b48b-4cd5-bb5c-cea9f38d6a32	3522 Linden Street 48124 Dearborn	26	true	09:00 AM 11:00 AM	94ddab23-78e1-4fa6-9341-c2ab111f9afd	69,593	delivered	power	12-Feb-26	Lincoln Park - 208	Detroit	3710 Dix Hwy Lincoln Park, MI 48146	February 12, 2026, 5:58 AM	
-
-(DONE) ok that is now fixed, but there seems to be a deeper issue, the optimizer for some reason completley ignored an order with 29 units that met all the qualifiers to stay in the window, the order does not show up in the optimizer results as reschedule or cancel, it seems the optimizer has an issue, can you check the logic extensivley and make sure it works as intended? why would an order just dissapear from the optimizer without being moved anywhere? It is not visible in the table 
-
-- The table is still confusing, 
-- Original total does not populate the original import values per window
-- for a certain window, In window shows 8, recieved shows 3
-
+UPDATE CLAUDE MD FILES
+REFACTOR CODE WHEREVER OPPORTUNITY EXSISTS
 
 
 # Changes 2/17
 
-## Metrics and KPI's updates :
+# Metrics and KPI's updates :
 We're refining the post‑optimization UX for Multiple Windows Optimization so dispatchers can clearly see where every order ended up after optimization is complete.
 
 ### Status language
