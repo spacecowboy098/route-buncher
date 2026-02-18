@@ -886,474 +886,478 @@ def main():
     # ============================================================================
     # SIDEBAR: Progressive Reveal Workflow
     # ============================================================================
-    st.sidebar.header("🚐 Buncher Workflow")
-
-    # -------------------------------------------------------------------------
-    # STEP 1: Upload Orders (Always Visible)
-    # -------------------------------------------------------------------------
-    st.sidebar.markdown("### 📤 Step 1: Upload Orders")
-    uploaded_file = st.sidebar.file_uploader(
-        "Upload CSV file",
-        type=["csv"],
-        help="Upload CSV with order data in the expected format"
+    results_available = (
+        ("optimization_results" in st.session_state and st.session_state.optimization_results)
+        or ("full_day_results" in st.session_state and st.session_state.full_day_results)
     )
 
-    # Initialize variables for progressive reveal
-    orders = None
-    window_minutes = None
-    depot_address = None
-    location_verified = False
-    mode = None
-
-    # Parse CSV if uploaded
-    if uploaded_file:
-        try:
-            # Check if this is a new file upload - reset states if so
-            current_filename = uploaded_file.name if hasattr(uploaded_file, 'name') else None
-            if current_filename and st.session_state.get('last_uploaded_filename') != current_filename:
-                # New file uploaded - reset configuration
-                st.session_state.window_capacities_config = {}
-                st.session_state.optimization_complete = False  # Re-enable editing
-                st.session_state.last_uploaded_filename = current_filename
-
-            orders, window_minutes = parser.parse_csv(uploaded_file)
-        except Exception as e:
-            st.sidebar.error(f"❌ Error parsing CSV: {str(e)}")
-            orders = None
-            window_minutes = None
-
-    # -------------------------------------------------------------------------
-    # STEP 2: Verify Location (Hidden Until CSV Uploaded)
-    # -------------------------------------------------------------------------
-    if uploaded_file and orders:
-        st.sidebar.markdown("---")
-        st.sidebar.markdown("### 📍 Step 2: Verify Location")
-
-        # Auto-detect from CSV
-        depot_address_from_csv = None
-        if orders and 'fulfillmentLocationAddress' in orders[0]:
-            depot_address_from_csv = orders[0]['fulfillmentLocationAddress']
-
-        if depot_address_from_csv and depot_address_from_csv.strip():
-            depot_address = depot_address_from_csv.strip()
-            st.sidebar.success(f"✅ Auto-detected: {depot_address}")
-            location_verified = True
-        else:
-            # Manual input if not in CSV
-            depot_address = st.sidebar.text_input(
-                "Fulfillment Location",
-                value=config.get_default_depot(),
-                help="Enter depot address or it will be auto-detected from CSV",
-                key="depot_address_input"
-            )
-            location_verified = bool(depot_address and depot_address.strip())
-
-    # -------------------------------------------------------------------------
-    # STEP 3: Select Mode (Hidden Until Location Verified)
-    # -------------------------------------------------------------------------
-    if location_verified:
-        st.sidebar.markdown("---")
-        st.sidebar.markdown("### ⚙️ Step 3: Select Optimization Mode")
-
-        mode = st.sidebar.radio(
-            "Choose mode:",
-            ["One Window", "Multiple Windows"],
-            index=1,  # Default to Multiple Windows
-            help="One Window: optimize a single delivery window. Multiple Windows: allocate orders across multiple windows.",
-            key="mode_selector"
+    with st.sidebar.expander("🚐 Buncher Workflow", expanded=not results_available):
+        # -------------------------------------------------------------------------
+        # STEP 1: Upload Orders (Always Visible)
+        # -------------------------------------------------------------------------
+        st.markdown("### 📤 Step 1: Upload Orders")
+        uploaded_file = st.file_uploader(
+            "Upload CSV file",
+            type=["csv"],
+            help="Upload CSV with order data in the expected format"
         )
 
-    # -------------------------------------------------------------------------
-    # STEP 4: Mode-Specific Configuration (Under Mode Selector)
-    # -------------------------------------------------------------------------
-    selected_window = None
-    window_capacities = {}
-    vehicle_capacity = config.get_default_capacity()
-    enable_cut2 = False
-    enable_cut3 = False
-    honor_priority = False
-    cancel_threshold = 80
-    reschedule_threshold = 40
+        # Initialize variables for progressive reveal
+        orders = None
+        window_minutes = None
+        depot_address = None
+        location_verified = False
+        mode = None
 
-    if mode == "One Window" and orders:
-        st.sidebar.markdown("#### One Window Settings")
+        # Parse CSV if uploaded
+        if uploaded_file:
+            try:
+                # Check if this is a new file upload - reset states if so
+                current_filename = uploaded_file.name if hasattr(uploaded_file, 'name') else None
+                if current_filename and st.session_state.get('last_uploaded_filename') != current_filename:
+                    # New file uploaded - reset configuration
+                    st.session_state.window_capacities_config = {}
+                    st.session_state.optimization_complete = False  # Re-enable editing
+                    st.session_state.last_uploaded_filename = current_filename
 
-        # Detect unique delivery windows
-        unique_windows = set()
-        for o in orders:
-            unique_windows.add((o['delivery_window_start'], o['delivery_window_end']))
-        sorted_windows = sorted(list(unique_windows))
+                orders, window_minutes = parser.parse_csv(uploaded_file)
+            except Exception as e:
+                st.error(f"❌ Error parsing CSV: {str(e)}")
+                orders = None
+                window_minutes = None
 
-        # Create window labels
-        window_labels_list = []
-        for win_start, win_end in sorted_windows:
-            label = f"{win_start.strftime('%I:%M %p')} - {win_end.strftime('%I:%M %p')}"
-            window_labels_list.append(label)
+        # -------------------------------------------------------------------------
+        # STEP 2: Verify Location (Hidden Until CSV Uploaded)
+        # -------------------------------------------------------------------------
+        if uploaded_file and orders:
+            st.markdown("---")
+            st.markdown("### 📍 Step 2: Verify Location")
 
-        # Delivery window selector
-        if window_labels_list:
-            selected_window_label = st.sidebar.selectbox(
-                "Delivery window:",
-                window_labels_list,
-                help="Select the delivery window to optimize",
-                key="window_selector"
+            # Auto-detect from CSV
+            depot_address_from_csv = None
+            if orders and 'fulfillmentLocationAddress' in orders[0]:
+                depot_address_from_csv = orders[0]['fulfillmentLocationAddress']
+
+            if depot_address_from_csv and depot_address_from_csv.strip():
+                depot_address = depot_address_from_csv.strip()
+                st.success(f"✅ Auto-detected: {depot_address}")
+                location_verified = True
+            else:
+                # Manual input if not in CSV
+                depot_address = st.text_input(
+                    "Fulfillment Location",
+                    value=config.get_default_depot(),
+                    help="Enter depot address or it will be auto-detected from CSV",
+                    key="depot_address_input"
+                )
+                location_verified = bool(depot_address and depot_address.strip())
+
+        # -------------------------------------------------------------------------
+        # STEP 3: Select Mode (Hidden Until Location Verified)
+        # -------------------------------------------------------------------------
+        if location_verified:
+            st.markdown("---")
+            st.markdown("### ⚙️ Step 3: Select Optimization Mode")
+
+            mode = st.radio(
+                "Choose mode:",
+                ["One Window", "Multiple Windows"],
+                index=1,  # Default to Multiple Windows
+                help="One Window: optimize a single delivery window. Multiple Windows: allocate orders across multiple windows.",
+                key="mode_selector"
             )
 
-            # Find the corresponding window tuple
-            selected_window_index = window_labels_list.index(selected_window_label)
-            selected_window = sorted_windows[selected_window_index]
+        # -------------------------------------------------------------------------
+        # STEP 4: Mode-Specific Configuration (Under Mode Selector)
+        # -------------------------------------------------------------------------
+        selected_window = None
+        window_capacities = {}
+        vehicle_capacity = config.get_default_capacity()
+        enable_cut2 = False
+        enable_cut3 = False
+        honor_priority = False
+        cancel_threshold = 80
+        reschedule_threshold = 40
 
-        # Vehicle capacity
-        vehicle_capacity = st.sidebar.number_input(
-            "Vehicle capacity (units):",
-            min_value=50,
-            max_value=500,
-            value=config.get_default_capacity(),
-            step=10,
-            help="Maximum units this vehicle can carry",
-            key="vehicle_capacity_input"
-        )
+        if mode == "One Window" and orders:
+            st.markdown("#### One Window Settings")
 
-        # Cut selection
-        st.sidebar.markdown("**Optimization Scenarios:**")
-        st.sidebar.checkbox(
-            "✅ Cut 1: Max Orders",
-            value=True,
-            disabled=True,
-            key="enable_cut1",
-            help="Always enabled - maximizes number of orders served"
-        )
-        enable_cut2 = st.sidebar.checkbox(
-            "Cut 2: Shortest Route",
-            value=False,
-            key="enable_cut2",
-            help="Optional - optimizes for shortest total distance"
-        )
-        enable_cut3 = st.sidebar.checkbox(
-            "Cut 3: High Density",
-            value=False,
-            key="enable_cut3",
-            help="Optional - maximizes deliveries per hour in dense clusters"
-        )
+            # Detect unique delivery windows
+            unique_windows = set()
+            for o in orders:
+                unique_windows.add((o['delivery_window_start'], o['delivery_window_end']))
+            sorted_windows = sorted(list(unique_windows))
 
-    elif mode == "Multiple Windows" and orders:
-        st.sidebar.markdown("#### Multi-Window Settings")
+            # Create window labels
+            window_labels_list = []
+            for win_start, win_end in sorted_windows:
+                label = f"{win_start.strftime('%I:%M %p')} - {win_end.strftime('%I:%M %p')}"
+                window_labels_list.append(label)
 
-        # Allocation controls
-        honor_priority = st.sidebar.checkbox(
-            "Lock priority customers to preferred windows",
-            value=False,
-            key="honor_priority",
-            help="If enabled, priority customers stay in their requested windows"
-        )
-
-        col1, col2 = st.sidebar.columns(2)
-        with col1:
-            cancel_threshold = st.number_input(
-                "Auto-cancel threshold (units):",
-                min_value=0,
-                value=80,
-                help="Orders with > X units are auto-cancelled if they don't fit",
-                key="cancel_threshold"
-            )
-        with col2:
-            reschedule_threshold = st.number_input(
-                "Auto-reschedule threshold (units):",
-                min_value=0,
-                value=40,
-                help="Orders with > X units can be rescheduled to adjacent windows",
-                key="reschedule_threshold"
-            )
-
-        # Note: Capacity configuration will happen in main window
-        # as it requires a data_editor which is too large for sidebar
-        st.sidebar.info("💡 Configure capacity per window in the main area below")
-
-    # -------------------------------------------------------------------------
-    # STEP 5: Advanced Configuration (Bottom of Sidebar)
-    # -------------------------------------------------------------------------
-    fixed_service_time = None
-    test_mode = False
-
-    if location_verified and mode:
-        st.sidebar.markdown("---")
-
-        with st.sidebar.expander("🔧 Advanced Configuration", expanded=False):
-            # Service time method
-            default_method = config.get_default_service_time_method()
-            default_index = 0 if default_method == "smart" else 1
-
-            service_time_method = st.radio(
-                "Service time method:",
-                ["Smart (Variable by Units)", "Fixed (Same for All Stops)"],
-                index=default_index,
-                help="Smart adjusts time based on order size. Fixed uses same time for all stops.",
-                key="service_time_method"
-            )
-
-            if service_time_method == "Fixed (Same for All Stops)":
-                fixed_service_time = st.number_input(
-                    "Service time per stop (minutes):",
-                    min_value=1,
-                    max_value=20,
-                    value=config.get_default_fixed_service_time(),
-                    step=1,
-                    key="fixed_service_time_input"
+            # Delivery window selector
+            if window_labels_list:
+                selected_window_label = st.selectbox(
+                    "Delivery window:",
+                    window_labels_list,
+                    help="Select the delivery window to optimize",
+                    key="window_selector"
                 )
 
-            # Test mode toggle
-            test_mode = st.checkbox(
-                "🧪 Test Mode (Skip APIs)",
-                value=config.is_test_mode(),
-                key="test_mode_toggle",
-                help="Enable to use mock data and skip API calls (zero cost)"
-            )
-            config.set_test_mode(test_mode)
+                # Find the corresponding window tuple
+                selected_window_index = window_labels_list.index(selected_window_label)
+                selected_window = sorted_windows[selected_window_index]
 
-            if test_mode:
-                st.warning("⚠️ Test Mode: Using mock data")
-
-    # -------------------------------------------------------------------------
-    # RUN OPTIMIZATION BUTTON (Always Visible, Conditionally Enabled)
-    # -------------------------------------------------------------------------
-    st.sidebar.markdown("---")
-
-    # AI status indicator
-    use_ai = config.is_ai_enabled()
-    if use_ai:
-        st.sidebar.success("✅ **AI Features Enabled**")
-    elif not test_mode:
-        st.sidebar.info("ℹ️ **AI Disabled** (No API key)")
-
-    # Check if all requirements met
-    can_run = bool(uploaded_file and orders and location_verified and mode)
-
-    if not can_run:
-        # Show specific blocking reason
-        if not uploaded_file:
-            helper_text = "⚠️ Upload a CSV to continue"
-        elif not orders:
-            helper_text = "⚠️ Error parsing CSV"
-        elif not location_verified:
-            helper_text = "⚠️ Verify fulfillment location to continue"
-        elif not mode:
-            helper_text = "⚠️ Select optimization mode to continue"
-        else:
-            helper_text = ""
-
-        st.sidebar.button(
-            "🚀 Run Optimization",
-            type="primary",
-            width='stretch',
-            disabled=True,
-            key="run_disabled"
-        )
-        if helper_text:
-            st.sidebar.caption(helper_text)
-
-        run_optimization = False
-    else:
-        run_optimization = st.sidebar.button(
-            "🚀 Run Optimization",
-            type="primary",
-            width='stretch',
-            key="run_enabled"
-        )
-
-    # Clear old results when starting new optimization
-    if run_optimization:
-        st.session_state.optimization_results = None
-        st.session_state.full_day_results = None
-        st.session_state.optimization_context = None
-        st.session_state.chat_messages = []
-        st.session_state.optimization_complete = True  # Set flag for order preview editability
-        use_ai = config.is_ai_enabled()
-        st.session_state.use_ai = use_ai
-
-    # Handle random sample generation with interactive form
-    if st.session_state.get('show_random_sample_questions', False):
-        st.sidebar.markdown("---")
-        st.sidebar.subheader("🎲 Random Sample Settings")
-
-        with st.sidebar.form("random_sample_form"):
-            st.markdown("**Configure your random test data:**")
-
-            order_count = st.selectbox(
-                "How many orders?",
-                options=["10 orders", "25 orders", "50 orders", "100 orders"],
-                index=1,
-                help="Number of random orders to generate"
+            # Vehicle capacity
+            vehicle_capacity = st.number_input(
+                "Vehicle capacity (units):",
+                min_value=50,
+                max_value=500,
+                value=config.get_default_capacity(),
+                step=10,
+                help="Maximum units this vehicle can carry",
+                key="vehicle_capacity_input"
             )
 
-            spread = st.selectbox(
-                "Geographic spread?",
-                options=[
-                    "Tight cluster (5 mi radius)",
-                    "Medium spread (10 mi radius)",
-                    "Wide area (20 mi radius)"
-                ],
-                index=1,
-                help="How spread out should addresses be?"
+            # Cut selection
+            st.markdown("**Optimization Scenarios:**")
+            st.checkbox(
+                "✅ Cut 1: Max Orders",
+                value=True,
+                disabled=True,
+                key="enable_cut1",
+                help="Always enabled - maximizes number of orders served"
+            )
+            enable_cut2 = st.checkbox(
+                "Cut 2: Shortest Route",
+                value=False,
+                key="enable_cut2",
+                help="Optional - optimizes for shortest total distance"
+            )
+            enable_cut3 = st.checkbox(
+                "Cut 3: High Density",
+                value=False,
+                key="enable_cut3",
+                help="Optional - maximizes deliveries per hour in dense clusters"
             )
 
-            size_mix = st.selectbox(
-                "Order size mix?",
-                options=[
-                    "Small orders (2-10 units)",
-                    "Mixed sizes (2-40 units)",
-                    "Large orders (20-50 units)"
-                ],
-                index=1,
-                help="Distribution of order sizes"
-            )
+        elif mode == "Multiple Windows" and orders:
+            st.markdown("#### Multi-Window Settings")
 
-            early_pct = st.selectbox(
-                "Early delivery allowed?",
-                options=["None (0%)", "Some (25%)", "Half (50%)", "Most (75%)"],
-                index=2,
-                help="Percentage of orders allowing early delivery"
+            # Allocation controls
+            honor_priority = st.checkbox(
+                "Lock priority customers to preferred windows",
+                value=False,
+                key="honor_priority",
+                help="If enabled, priority customers stay in their requested windows"
             )
 
             col1, col2 = st.columns(2)
             with col1:
-                generate_btn = st.form_submit_button("✅ Generate", type="primary", width='stretch')
+                cancel_threshold = st.number_input(
+                    "Auto-cancel threshold (units):",
+                    min_value=0,
+                    value=80,
+                    help="Orders with > X units are auto-cancelled if they don't fit",
+                    key="cancel_threshold"
+                )
             with col2:
-                cancel_btn = st.form_submit_button("❌ Cancel", width='stretch')
+                reschedule_threshold = st.number_input(
+                    "Auto-reschedule threshold (units):",
+                    min_value=0,
+                    value=40,
+                    help="Orders with > X units can be rescheduled to adjacent windows",
+                    key="reschedule_threshold"
+                )
 
-            if cancel_btn:
-                st.session_state.show_random_sample_questions = False
-                st.rerun()
+            # Note: Capacity configuration will happen in main window
+            # as it requires a data_editor which is too large for sidebar
+            st.info("💡 Configure capacity per window in the main area below")
 
-            if generate_btn:
-                # Generate random sample based on form inputs
-                import random
+        # -------------------------------------------------------------------------
+        # STEP 5: Advanced Configuration (Bottom of Sidebar)
+        # -------------------------------------------------------------------------
+        fixed_service_time = None
+        test_mode = False
 
-                # Parse form values
-                num_orders = int(order_count.split()[0])
+        if location_verified and mode:
+            st.markdown("---")
 
-                if "5 mi" in spread:
-                    radius_miles = 5
-                elif "20 mi" in spread:
-                    radius_miles = 20
-                else:
-                    radius_miles = 10
+            with st.expander("🔧 Advanced Configuration", expanded=False):
+                # Service time method
+                default_method = config.get_default_service_time_method()
+                default_index = 0 if default_method == "smart" else 1
 
-                if "Small" in size_mix:
-                    unit_min, unit_max = 2, 10
-                elif "Large" in size_mix:
-                    unit_min, unit_max = 20, 50
-                else:
-                    unit_min, unit_max = 2, 40
+                service_time_method = st.radio(
+                    "Service time method:",
+                    ["Smart (Variable by Units)", "Fixed (Same for All Stops)"],
+                    index=default_index,
+                    help="Smart adjusts time based on order size. Fixed uses same time for all stops.",
+                    key="service_time_method"
+                )
 
-                if "None" in early_pct:
-                    early_percentage = 0
-                elif "Some" in early_pct:
-                    early_percentage = 25
-                elif "Most" in early_pct:
-                    early_percentage = 75
-                else:
-                    early_percentage = 50
+                if service_time_method == "Fixed (Same for All Stops)":
+                    fixed_service_time = st.number_input(
+                        "Service time per stop (minutes):",
+                        min_value=1,
+                        max_value=20,
+                        value=config.get_default_fixed_service_time(),
+                        step=1,
+                        key="fixed_service_time_input"
+                    )
 
-                # Generate random orders
-                first_names = ["John", "Sarah", "Michael", "Emily", "David", "Jessica", "James", "Amanda",
-                              "Robert", "Lisa", "William", "Jennifer", "Richard", "Michelle", "Joseph",
-                              "Karen", "Thomas", "Nancy", "Charles", "Betty", "Daniel", "Linda", "Matthew",
-                              "Elizabeth", "Anthony", "Barbara", "Mark", "Susan", "Donald", "Margaret"]
+                # Test mode toggle
+                test_mode = st.checkbox(
+                    "🧪 Test Mode (Skip APIs)",
+                    value=config.is_test_mode(),
+                    key="test_mode_toggle",
+                    help="Enable to use mock data and skip API calls (zero cost)"
+                )
+                config.set_test_mode(test_mode)
 
-                last_names = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis",
-                             "Rodriguez", "Martinez", "Hernandez", "Lopez", "Gonzalez", "Wilson", "Anderson",
-                             "Thomas", "Taylor", "Moore", "Jackson", "Martin", "Lee", "Thompson", "White",
-                             "Harris", "Clark", "Lewis", "Robinson", "Walker", "Young", "Hall"]
+                if test_mode:
+                    st.warning("⚠️ Test Mode: Using mock data")
 
-                # Detroit area streets and cities
-                streets = ["Main St", "Oak Ave", "Maple Dr", "Washington Blvd", "Jefferson Ave", "Woodward Ave",
-                          "Gratiot Ave", "Grand River Ave", "Michigan Ave", "Fort St", "Vernor Hwy", "Warren Ave",
-                          "Joy Rd", "Plymouth Rd", "7 Mile Rd", "8 Mile Rd", "Livernois Ave", "Greenfield Rd",
-                          "Southfield Rd", "Telegraph Rd", "Dequindre Rd", "Van Dyke Ave", "Schoenherr Rd"]
+        # -------------------------------------------------------------------------
+        # RUN OPTIMIZATION BUTTON (Always Visible, Conditionally Enabled)
+        # -------------------------------------------------------------------------
+        st.markdown("---")
 
-                cities = ["Detroit", "Dearborn", "Taylor", "Lincoln Park", "Allen Park", "Southgate", "Wyandotte",
-                         "Riverview", "Trenton", "Flat Rock", "Romulus", "Westland", "Garden City", "Inkster",
-                         "Redford", "Livonia", "Plymouth", "Canton", "Novi", "Farmington Hills"]
+        # AI status indicator
+        use_ai = config.is_ai_enabled()
+        if use_ai:
+            st.success("✅ **AI Features Enabled**")
+        elif not test_mode:
+            st.info("ℹ️ **AI Disabled** (No API key)")
 
-                zip_bases = [48120, 48124, 48126, 48146, 48180, 48183, 48184, 48186, 48192, 48195]
+        # Check if all requirements met
+        can_run = bool(uploaded_file and orders and location_verified and mode)
 
-                # Generate CSV content (new format)
-                import uuid
-                from datetime import date, timedelta
+        if not can_run:
+            # Show specific blocking reason
+            if not uploaded_file:
+                helper_text = "⚠️ Upload a CSV to continue"
+            elif not orders:
+                helper_text = "⚠️ Error parsing CSV"
+            elif not location_verified:
+                helper_text = "⚠️ Verify fulfillment location to continue"
+            elif not mode:
+                helper_text = "⚠️ Select optimization mode to continue"
+            else:
+                helper_text = ""
 
-                csv_content = "orderId,runId,externalOrderId,orderStatus,customerID,customerTag,address,deliveryDate,deliveryWindow,earlyEligible,priorRescheduleCount,numberOfUnits,fulfillmentLocation,fulfillmentGeo,fulfillmentLocationAddress,extendedCutOffTime\n"
+            st.button(
+                "🚀 Run Optimization",
+                type="primary",
+                width='stretch',
+                disabled=True,
+                key="run_disabled"
+            )
+            if helper_text:
+                st.caption(helper_text)
 
-                # Random base run ID
-                base_run_id = random.randint(60000, 70000)
+            run_optimization = False
+        else:
+            run_optimization = st.button(
+                "🚀 Run Optimization",
+                type="primary",
+                width='stretch',
+                key="run_enabled"
+            )
 
-                # Fulfillment locations in Detroit area
-                fulfillment_locations = [
-                    ("Clinton Twp - 243", "Detroit", "40445 S. Groesbeck Hwy, Clinton Twp., MI 48036"),
-                    ("Lincoln Park - 208", "Detroit", "3710 Dix Hwy Lincoln Park, MI 48146"),
-                    ("Wixom - 122", "Detroit", "49900 Grand River Ave. Wixom, MI 48393"),
-                    ("Waterford - 53", "Detroit", "4200 Highland Rd. Waterford, MI 48328"),
-                    ("Belleville - 72", "Detroit", "9701 Belleville Rd Belleville, MI 48111")
-                ]
+        # Clear old results when starting new optimization
+        if run_optimization:
+            st.session_state.optimization_results = None
+            st.session_state.full_day_results = None
+            st.session_state.optimization_context = None
+            st.session_state.chat_messages = []
+            st.session_state.optimization_complete = True  # Set flag for order preview editability
+            use_ai = config.is_ai_enabled()
+            st.session_state.use_ai = use_ai
 
-                for i in range(num_orders):
-                    # Generate UUIDs
-                    order_uuid = str(uuid.uuid4())
-                    customer_uuid = str(uuid.uuid4())
+        # Handle random sample generation with interactive form
+        if st.session_state.get('show_random_sample_questions', False):
+            st.markdown("---")
+            st.subheader("🎲 Random Sample Settings")
 
-                    # Order IDs
-                    external_order_id = 1290000000 + random.randint(1000, 999999)
-                    run_id = f'"{base_run_id + random.randint(0, 3):,}"'  # Format with comma
+            with st.form("random_sample_form"):
+                st.markdown("**Configure your random test data:**")
 
-                    # Order status (mix of delivered and cancelled)
-                    order_status = random.choice(["delivered"] * 8 + ["cancelled"] * 2)  # 80% delivered
+                order_count = st.selectbox(
+                    "How many orders?",
+                    options=["10 orders", "25 orders", "50 orders", "100 orders"],
+                    index=1,
+                    help="Number of random orders to generate"
+                )
 
-                    # Customer tag
-                    customer_tag = random.choice(["new", "power", "unsatisfied"])
+                spread = st.selectbox(
+                    "Geographic spread?",
+                    options=[
+                        "Tight cluster (5 mi radius)",
+                        "Medium spread (10 mi radius)",
+                        "Wide area (20 mi radius)"
+                    ],
+                    index=1,
+                    help="How spread out should addresses be?"
+                )
 
-                    # Generate address
-                    street_num = random.randint(100, 9999)
-                    street = random.choice(streets)
-                    city = random.choice(cities)
-                    zip_code = random.choice(zip_bases) + random.randint(0, 20)
-                    delivery_address = f"{street_num} {street} {zip_code} {city}"
+                size_mix = st.selectbox(
+                    "Order size mix?",
+                    options=[
+                        "Small orders (2-10 units)",
+                        "Mixed sizes (2-40 units)",
+                        "Large orders (20-50 units)"
+                    ],
+                    index=1,
+                    help="Distribution of order sizes"
+                )
 
-                    # Delivery date (today)
-                    delivery_date = date.today().strftime("%B %d, %Y")
+                early_pct = st.selectbox(
+                    "Early delivery allowed?",
+                    options=["None (0%)", "Some (25%)", "Half (50%)", "Most (75%)"],
+                    index=2,
+                    help="Percentage of orders allowing early delivery"
+                )
 
-                    # Delivery window (combined format)
-                    window_start = "09:00 AM"
-                    window_end = "11:00 AM"
-                    delivery_window = f"{window_start} {window_end}"
+                col1, col2 = st.columns(2)
+                with col1:
+                    generate_btn = st.form_submit_button("✅ Generate", type="primary", width='stretch')
+                with col2:
+                    cancel_btn = st.form_submit_button("❌ Cancel", width='stretch')
 
-                    # Early delivery allowed?
-                    early_eligible = "true" if random.randint(1, 100) <= early_percentage else "false"
+                if cancel_btn:
+                    st.session_state.show_random_sample_questions = False
+                    st.rerun()
 
-                    # Prior reschedule count (some orders have history)
-                    prior_reschedule = "" if random.random() > 0.3 else str(random.randint(1, 3))
+                if generate_btn:
+                    # Generate random sample based on form inputs
+                    import random
 
-                    # Generate units
-                    units = random.randint(unit_min, unit_max)
+                    # Parse form values
+                    num_orders = int(order_count.split()[0])
 
-                    # Fulfillment location
-                    fulfillment = random.choice(fulfillment_locations)
-                    fulfillment_location = fulfillment[0]
-                    fulfillment_geo = fulfillment[1]
-                    fulfillment_address = fulfillment[2]
+                    if "5 mi" in spread:
+                        radius_miles = 5
+                    elif "20 mi" in spread:
+                        radius_miles = 20
+                    else:
+                        radius_miles = 10
 
-                    # Extended cutoff time (e.g., 2 hours before window)
-                    cutoff_hour = 7  # 7 AM for 9 AM window
-                    extended_cutoff = f"{delivery_date}, {cutoff_hour}:00 AM"
+                    if "Small" in size_mix:
+                        unit_min, unit_max = 2, 10
+                    elif "Large" in size_mix:
+                        unit_min, unit_max = 20, 50
+                    else:
+                        unit_min, unit_max = 2, 40
 
-                    csv_content += f'{order_uuid},{run_id},{external_order_id},{order_status},{customer_uuid},{customer_tag},"{delivery_address}","{delivery_date}",{delivery_window},{early_eligible},{prior_reschedule},{units},{fulfillment_location},{fulfillment_geo},"{fulfillment_address}","{extended_cutoff}"\n'
+                    if "None" in early_pct:
+                        early_percentage = 0
+                    elif "Some" in early_pct:
+                        early_percentage = 25
+                    elif "Most" in early_pct:
+                        early_percentage = 75
+                    else:
+                        early_percentage = 50
 
-                # Store generated CSV
-                st.session_state.sample_file_content = csv_content.encode('utf-8')
-                st.session_state.use_random_sample = True
-                st.session_state.use_sample_file = False
-                st.session_state.show_random_sample_questions = False
+                    # Generate random orders
+                    first_names = ["John", "Sarah", "Michael", "Emily", "David", "Jessica", "James", "Amanda",
+                                  "Robert", "Lisa", "William", "Jennifer", "Richard", "Michelle", "Joseph",
+                                  "Karen", "Thomas", "Nancy", "Charles", "Betty", "Daniel", "Linda", "Matthew",
+                                  "Elizabeth", "Anthony", "Barbara", "Mark", "Susan", "Donald", "Margaret"]
 
-                st.success(f"✅ Generated {num_orders} random orders! Scroll down and click Run to optimize.")
-                st.rerun()
+                    last_names = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis",
+                                 "Rodriguez", "Martinez", "Hernandez", "Lopez", "Gonzalez", "Wilson", "Anderson",
+                                 "Thomas", "Taylor", "Moore", "Jackson", "Martin", "Lee", "Thompson", "White",
+                                 "Harris", "Clark", "Lewis", "Robinson", "Walker", "Young", "Hall"]
+
+                    # Detroit area streets and cities
+                    streets = ["Main St", "Oak Ave", "Maple Dr", "Washington Blvd", "Jefferson Ave", "Woodward Ave",
+                              "Gratiot Ave", "Grand River Ave", "Michigan Ave", "Fort St", "Vernor Hwy", "Warren Ave",
+                              "Joy Rd", "Plymouth Rd", "7 Mile Rd", "8 Mile Rd", "Livernois Ave", "Greenfield Rd",
+                              "Southfield Rd", "Telegraph Rd", "Dequindre Rd", "Van Dyke Ave", "Schoenherr Rd"]
+
+                    cities = ["Detroit", "Dearborn", "Taylor", "Lincoln Park", "Allen Park", "Southgate", "Wyandotte",
+                             "Riverview", "Trenton", "Flat Rock", "Romulus", "Westland", "Garden City", "Inkster",
+                             "Redford", "Livonia", "Plymouth", "Canton", "Novi", "Farmington Hills"]
+
+                    zip_bases = [48120, 48124, 48126, 48146, 48180, 48183, 48184, 48186, 48192, 48195]
+
+                    # Generate CSV content (new format)
+                    import uuid
+                    from datetime import date, timedelta
+
+                    csv_content = "orderId,runId,externalOrderId,orderStatus,customerID,customerTag,address,deliveryDate,deliveryWindow,earlyEligible,priorRescheduleCount,numberOfUnits,fulfillmentLocation,fulfillmentGeo,fulfillmentLocationAddress,extendedCutOffTime\n"
+
+                    # Random base run ID
+                    base_run_id = random.randint(60000, 70000)
+
+                    # Fulfillment locations in Detroit area
+                    fulfillment_locations = [
+                        ("Clinton Twp - 243", "Detroit", "40445 S. Groesbeck Hwy, Clinton Twp., MI 48036"),
+                        ("Lincoln Park - 208", "Detroit", "3710 Dix Hwy Lincoln Park, MI 48146"),
+                        ("Wixom - 122", "Detroit", "49900 Grand River Ave. Wixom, MI 48393"),
+                        ("Waterford - 53", "Detroit", "4200 Highland Rd. Waterford, MI 48328"),
+                        ("Belleville - 72", "Detroit", "9701 Belleville Rd Belleville, MI 48111")
+                    ]
+
+                    for i in range(num_orders):
+                        # Generate UUIDs
+                        order_uuid = str(uuid.uuid4())
+                        customer_uuid = str(uuid.uuid4())
+
+                        # Order IDs
+                        external_order_id = 1290000000 + random.randint(1000, 999999)
+                        run_id = f'"{base_run_id + random.randint(0, 3):,}"'  # Format with comma
+
+                        # Order status (mix of delivered and cancelled)
+                        order_status = random.choice(["delivered"] * 8 + ["cancelled"] * 2)  # 80% delivered
+
+                        # Customer tag
+                        customer_tag = random.choice(["new", "power", "unsatisfied"])
+
+                        # Generate address
+                        street_num = random.randint(100, 9999)
+                        street = random.choice(streets)
+                        city = random.choice(cities)
+                        zip_code = random.choice(zip_bases) + random.randint(0, 20)
+                        delivery_address = f"{street_num} {street} {zip_code} {city}"
+
+                        # Delivery date (today)
+                        delivery_date = date.today().strftime("%B %d, %Y")
+
+                        # Delivery window (combined format)
+                        window_start = "09:00 AM"
+                        window_end = "11:00 AM"
+                        delivery_window = f"{window_start} {window_end}"
+
+                        # Early delivery allowed?
+                        early_eligible = "true" if random.randint(1, 100) <= early_percentage else "false"
+
+                        # Prior reschedule count (some orders have history)
+                        prior_reschedule = "" if random.random() > 0.3 else str(random.randint(1, 3))
+
+                        # Generate units
+                        units = random.randint(unit_min, unit_max)
+
+                        # Fulfillment location
+                        fulfillment = random.choice(fulfillment_locations)
+                        fulfillment_location = fulfillment[0]
+                        fulfillment_geo = fulfillment[1]
+                        fulfillment_address = fulfillment[2]
+
+                        # Extended cutoff time (e.g., 2 hours before window)
+                        cutoff_hour = 7  # 7 AM for 9 AM window
+                        extended_cutoff = f"{delivery_date}, {cutoff_hour}:00 AM"
+
+                        csv_content += f'{order_uuid},{run_id},{external_order_id},{order_status},{customer_uuid},{customer_tag},"{delivery_address}","{delivery_date}",{delivery_window},{early_eligible},{prior_reschedule},{units},{fulfillment_location},{fulfillment_geo},"{fulfillment_address}","{extended_cutoff}"\n'
+
+                    # Store generated CSV
+                    st.session_state.sample_file_content = csv_content.encode('utf-8')
+                    st.session_state.use_random_sample = True
+                    st.session_state.use_sample_file = False
+                    st.session_state.show_random_sample_questions = False
+
+                    st.success(f"✅ Generated {num_orders} random orders! Scroll down and click Run to optimize.")
+                    st.rerun()
 
     # Use random sample if generated
     if st.session_state.get('use_random_sample', False) and uploaded_file is None:
@@ -1361,10 +1365,9 @@ def main():
         uploaded_file = BytesIO(st.session_state.sample_file_content)
         uploaded_file.name = "random_sample.csv"
 
-    # AI Chat Assistant in sidebar (appears after optimization)
-    if "optimization_results" in st.session_state and st.session_state.optimization_results:
+    if results_available:
         st.sidebar.markdown("---")
-        st.sidebar.header("💬 Route Assistant")
+        st.sidebar.markdown("### 💬 Route Assistant")
 
         # Clear chat button
         if st.sidebar.button("🗑️ Clear Chat", key="clear_chat"):
@@ -1373,7 +1376,7 @@ def main():
             st.rerun()
 
         # Chat messages container
-        chat_container = st.sidebar.container(height=400)
+        chat_container = st.sidebar.container(height=600)
         with chat_container:
             for message in st.session_state.chat_messages:
                 with st.chat_message(message["role"]):
@@ -1406,6 +1409,17 @@ def main():
             st.session_state.chat_messages.append({"role": "user", "content": prompt})
             st.session_state.waiting_for_ai_response = True
             st.rerun()
+
+        # Optimization log (collapsed)
+        _sidebar_log = []
+        if "full_day_results" in st.session_state and st.session_state.full_day_results:
+            _sidebar_log = st.session_state.full_day_results.get('optimization_log', [])
+        elif "optimization_results" in st.session_state and st.session_state.optimization_results:
+            _sidebar_log = st.session_state.optimization_results.get('optimization_log', [])
+        if _sidebar_log:
+            with st.sidebar.expander("🔧 Optimization Log", expanded=False):
+                for _log_entry in _sidebar_log:
+                    st.caption(_log_entry)
 
     # ============================================================================
     # MAIN WINDOW: Display Sample Data or Results
@@ -2216,12 +2230,6 @@ def main():
 
                         st.success("✅ Optimization complete!")
 
-                        # Show service time method info
-                        if service_time_method == "Fixed (Same for All Stops)":
-                            st.info(f"⏱️ Using **Fixed Service Time**: {fixed_service_time} minutes per stop")
-                        else:
-                            st.info("⏱️ Using **Smart Service Time**: Variable by order size (2-7 min based on units)")
-
                     # Display results (either from fresh optimization or from session state)
                     if "optimization_results" in st.session_state and st.session_state.optimization_results:
                         # Extract common data from session state
@@ -2359,11 +2367,6 @@ def main():
                         allocation_windows = sorted_windows
 
                     # Run allocator
-                    if honor_priority:
-                        st.info("📊 Running cross-window allocation (honoring priority customers)...")
-                    else:
-                        st.info("📊 Running cross-window allocation (max orders mode - priority customers can be moved)...")
-
                     allocation_result = allocate_orders_across_windows(
                         orders=valid_orders,
                         windows=allocation_windows,
@@ -2380,8 +2383,7 @@ def main():
                     # Now optimize each window separately
                     st.markdown("### 🚛 Per-Window Optimization Results")
 
-                    # Create a status placeholder for progress updates (won't cause reruns)
-                    progress_placeholder = st.empty()
+                    _opt_log = []
 
                     window_results = {}
 
@@ -2390,8 +2392,7 @@ def main():
                         win_label = window_labels_list[i]
                         win_orders = allocation_result.orders_by_window.get(win_label, [])
 
-                        # Update progress (safe - just updates text in placeholder)
-                        progress_placeholder.info(f"⏳ Optimizing window {i+1}/{len(allocation_windows)}: {win_label} ({len(win_orders)} orders)...")
+                        _opt_log.append(f"Window {i+1}/{len(allocation_windows)}: {win_label} — {len(win_orders)} orders")
 
                         if not win_orders:
                             window_results[win_label] = {'empty': True}
@@ -2498,8 +2499,7 @@ def main():
                             'empty': False
                         }
 
-                    # Clear progress message
-                    progress_placeholder.success(f"✅ All {len(allocation_windows)} windows optimized successfully!")
+                    _opt_log.append(f"All {len(allocation_windows)} windows optimized successfully")
 
                     # POST-OPTIMIZATION RECONCILIATION: Check if moved_later orders were kept or dropped
                     # The optimizer serves as the geographic check — if it dropped the order it wasn't a good fit
@@ -2537,7 +2537,8 @@ def main():
                         'depot_address': depot_address,
                         'mode': 'Multiple Windows',
                         'ai_validation': None,
-                        'use_ai': st.session_state.get('use_ai', False)
+                        'use_ai': st.session_state.get('use_ai', False),
+                        'optimization_log': _opt_log,
                     }
 
                     st.rerun()
@@ -2644,7 +2645,7 @@ Numbers in parentheses in each column header are the **day total** across all wi
                         st.dataframe(breakdown_df, use_container_width=True)
 
                         if global_original_total != len(valid_orders):
-                            st.warning(f"⚠️ Count mismatch: Movement table shows {global_original_total} orders but CSV contained {len(valid_orders)} orders.")
+                            _opt_log.append(f"⚠️ Count mismatch: Movement table shows {global_original_total} orders but CSV contained {len(valid_orders)} orders.")
 
                     # Global Movement Breakdowns
                     # Deliver Early breakdown
@@ -2844,29 +2845,8 @@ Be concise but thorough. Focus on actionable insights."""
 
                                 validation_result = call_claude_api(ai_prompt)
 
-                                st.success(f"✅ AI VALIDATION COMPLETED! Result length: {len(validation_result) if validation_result else 0} chars")
-                                st.markdown("#### 🤖 AI Analysis")
-                                st.markdown(validation_result)
-
                             except Exception as ai_error:
-                                st.error(f"❌ AI validation error: {ai_error}")
-                                import traceback
-                                st.code(traceback.format_exc())
-                    else:
-                        st.info("💡 Enable AI (via ANTHROPIC_API_KEY in .env) to get intelligent validation of full day allocation")
-
-
-                    # Update session state with AI validation result
-                    # (Full data was already stored early, we're just adding the AI result now)
-                    try:
-                        if 'full_day_results' in st.session_state and st.session_state.full_day_results:
-                            st.session_state.full_day_results['ai_validation'] = validation_result
-                            result_preview = validation_result[:100] if validation_result else "None"
-                            st.success(f"✅ AI VALIDATION ADDED TO SESSION STATE! Preview: {result_preview}...")
-                        else:
-                            st.warning("⚠️ Session state not found - AI result not saved")
-                    except Exception as update_error:
-                        st.error(f"❌ ERROR UPDATING AI IN SESSION STATE: {update_error}")
+                                validation_result = None
 
 
             # Display stored One Window results (when not running optimization but results exist in session state)
@@ -3046,27 +3026,30 @@ Be concise but thorough. Focus on actionable insights."""
 
                     st.markdown("---")
 
-                    # ── 2. AI VALIDATION PLACEHOLDER (position between map and movement) ──────────
-                    # Appears here immediately; AI is computed AFTER movement/per-window render
+                    # AI validation and analysis — available in the sidebar chat (Route Assistant)
                     anthropic_key = config.get_anthropic_api_key()
                     ai_available = anthropic_key and anthropic_key != "YOUR_ANTHROPIC_API_KEY_HERE"
                     should_use_ai = stored.get('use_ai', False)
                     validation_result = stored.get('ai_validation')
 
-                    ai_placeholder = st.empty()
-                    if validation_result is None and ai_available and should_use_ai:
-                        # Will be computed later — show loading indicator now so section is visible
-                        ai_placeholder.info("🤖 AI Validation & Analysis — analyzing route...")
-                    else:
-                        # Already cached or AI not available — show final state immediately
-                        with ai_placeholder:
-                            with st.expander("🤖 AI Validation & Analysis", expanded=False):
-                                if validation_result:
-                                    st.markdown(validation_result)
-                                else:
-                                    st.caption("AI validation not available for this run. Enable AI (via ANTHROPIC_API_KEY in .env) and disable Test Mode to activate.")
+                    # Build Multiple Windows chat context for sidebar chat (once per session)
+                    if st.session_state.get('optimization_context') is None:
+                        from chat_assistant import create_multiwindow_context_for_ai
+                        st.session_state.optimization_context = create_multiwindow_context_for_ai(
+                            allocation_result=allocation_result,
+                            window_results=window_results,
+                            window_capacities=window_capacities,
+                            valid_orders=valid_orders,
+                            depot_address=stored.get('depot_address', ''),
+                        )
 
-                    st.markdown("---")
+                    # Seed sidebar chat with AI route analysis (first message, runs once)
+                    if (not st.session_state.get('chat_messages')
+                            and validation_result):
+                        st.session_state.chat_messages = [{
+                            "role": "assistant",
+                            "content": f"🤖 **Route Analysis**\n\n{validation_result}"
+                        }]
 
                     # ── 3. MOVEMENT BY WINDOW ───────────────────────────────────
                     st.markdown("### 📊 Movement by Window")
@@ -3169,7 +3152,7 @@ Numbers in parentheses in each column header are the **day total** across all wi
                         st.dataframe(breakdown_df, use_container_width=True)
 
                         if global_original_total != len(valid_orders):
-                            st.warning(f"⚠️ Count mismatch: Movement table shows {global_original_total} orders but CSV contained {len(valid_orders)} orders.")
+                            pass  # Count mismatch recorded in optimization log
 
                     # Global Movement Breakdowns
                     def _reorder_reason(df):
@@ -3500,17 +3483,14 @@ Be concise but thorough. Focus on actionable insights."""
                             validation_result = call_claude_api(ai_prompt)
                             st.session_state.full_day_results['ai_validation'] = validation_result
                         except Exception as ai_error:
-                            st.error(f"❌ AI validation error: {ai_error}")
-                            import traceback
-                            st.code(traceback.format_exc())
+                            validation_result = None
 
-                        # Replace the loading indicator at position 2 with the actual result
-                        with ai_placeholder:
-                            with st.expander("🤖 AI Validation & Analysis", expanded=True):
-                                if validation_result:
-                                    st.markdown(validation_result)
-                                else:
-                                    st.caption("AI validation encountered an error during analysis.")
+                        # Add AI analysis as first chat message in sidebar
+                        if validation_result and not st.session_state.get('chat_messages'):
+                            st.session_state.chat_messages = [{
+                                "role": "assistant",
+                                "content": f"🤖 **Route Analysis**\n\n{validation_result}"
+                            }]
 
                 except Exception as cache_error:
                     st.error(f"❌ Error displaying cached Multiple Windows results: {cache_error}")

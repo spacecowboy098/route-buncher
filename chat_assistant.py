@@ -188,6 +188,56 @@ You can answer questions about the optimization results and help dispatchers und
     return context
 
 
+def create_multiwindow_context_for_ai(
+    allocation_result,
+    window_results: dict,
+    window_capacities: dict,
+    valid_orders: list,
+    depot_address: str,
+) -> str:
+    """Build AI chat context for a full multi-window optimization result."""
+    context = f"""You are an AI assistant helping a Buncha dispatcher understand multi-window delivery routes.
+
+DEPOT: {depot_address}
+TOTAL ORDERS PROCESSED: {len(valid_orders)}
+
+PER-WINDOW ROUTES:
+"""
+    for win_label, result in window_results.items():
+        if result.get('empty'):
+            context += f"\n{win_label}: No orders assigned\n"
+            continue
+        cap = window_capacities.get(win_label, 0)
+        kept_units = result.get('total_units', 0)
+        route_time = result.get('route_time', 0)
+        duration = result.get('duration', 0)
+        context += f"\n{win_label}: {result.get('orders_kept',0)} orders | {kept_units}/{cap} units | {route_time}/{duration} min\n"
+        for k in sorted(result.get('keep', []), key=lambda x: x.get('sequence_index', 0)):
+            context += (f"  Stop {k.get('sequence_index',0)+1}: "
+                        f"#{k.get('order_id')} — {k.get('delivery_address','')} "
+                        f"({k.get('units',0)} units, +{k.get('estimated_arrival',0)} min)\n")
+
+    context += f"""
+CROSS-WINDOW MOVEMENTS:
+- Kept in original window: {len(allocation_result.kept_in_window)}
+- Moved early (to earlier window): {len(allocation_result.moved_early)}
+- Pushed to later window: {len(allocation_result.moved_later)}
+- Reschedule to new day: {len(allocation_result.reschedule)}
+- Cancel recommended: {len(allocation_result.cancel)}
+"""
+    for a in allocation_result.reschedule:
+        context += f"  RESCHEDULE: #{a.order.get('order_id')} ({a.order.get('units')}u) — {a.reason}\n"
+    for a in allocation_result.cancel:
+        context += f"  CANCEL: #{a.order.get('order_id')} ({a.order.get('units')}u) — {a.reason}\n"
+
+    context += """
+YOUR ROLE: Explain why orders landed in specific windows, why some were rescheduled or cancelled,
+and help the dispatcher evaluate changes before final dispatch. Be specific — reference order IDs,
+units, times, and window labels.
+"""
+    return context
+
+
 def chat_with_assistant(messages: List[Dict[str, str]], context: str, api_key: str) -> str:
     """
     Send messages to Claude AI and get a response.
