@@ -580,8 +580,8 @@ def display_optimization_results(keep, early, reschedule, cancel, kept, service_
                                  vehicle_capacity, window_minutes, strategy_desc, show_ai_explanations=True):
     """Display results for one optimization strategy."""
 
-    # Summary metrics
-    st.subheader("📊 Summary")
+    # Route KPIs first (per user preference)
+    st.subheader("📊 Route KPIs")
     col1, col2, col3, col4 = st.columns(4)
 
     total_kept_units = sum(o["units"] for o in keep)
@@ -679,6 +679,31 @@ def display_optimization_results(keep, early, reschedule, cancel, kept, service_
     with col8:
         st.metric("Dead Leg", f"{dead_leg_time} min", help="Time from last delivery back to fulfillment location")
 
+    st.markdown("---")
+
+    # Movement Summary Table (after KPIs, per user preference)
+    st.subheader("📊 Movement Summary")
+
+    original_total = len(valid_orders)
+    on_route_count = len(keep)
+    early_count = len(early)
+    reschedule_count = len(reschedule)
+    cancel_count = len(cancel)
+
+    movement_data = [{
+        "Original Total": original_total,
+        "🚛 On Route": on_route_count,
+        "⏰ Deliver Early": early_count,
+        "📅 Reschedule": reschedule_count,
+        "❌ Cancel": cancel_count
+    }]
+
+    movement_df = pd.DataFrame(movement_data)
+    st.dataframe(movement_df, use_container_width=True)
+    st.caption(f"All {original_total} orders classified after optimization.")
+
+    st.markdown("---")
+
     # Map Visualization
     st.subheader("🗺️ Geographic Overview")
     try:
@@ -703,17 +728,8 @@ def display_optimization_results(keep, early, reschedule, cancel, kept, service_
         st.warning(f"❌ Error creating map: {str(e)}")
         st.info("💡 Try loading a different cut or re-running the optimization.")
 
-    # Display route sequence
-    if keep:
-        st.subheader("🗺️ Route Sequence")
-        route_parts = ["Fulfillment Location"]
-        for k in sorted(keep, key=lambda x: x["sequence_index"]):
-            route_parts.append(f"Order {k['order_id']}")
-        route_parts.append("Fulfillment Location")
-        st.write(" → ".join(route_parts))
-
-    # Display In Window orders
-    st.subheader("✅ In Window")
+    # Display On Route orders
+    st.subheader("🚛 On Route")
     if keep:
         keep_data = []
         for k in sorted(keep, key=lambda x: x["sequence_index"]):
@@ -737,72 +753,65 @@ def display_optimization_results(keep, early, reschedule, cancel, kept, service_
     else:
         st.info("No orders kept in route (capacity or time constraints too tight)")
 
-    # Display Deliver Early orders
-    st.subheader("⏰ Deliver Early")
+    # Deliver Early expander (matches Multiple Windows UX)
     if early:
-        early_data = []
-        for e in early:
-            # Create row with standard 7 fields
-            row = create_standard_row(e)
+        with st.expander(f"⏰ Deliver Early ({len(early)} orders)", expanded=False):
+            early_data = []
+            for e in early:
+                # Create row with standard 7 fields
+                row = create_standard_row(e)
 
-            # Add optimizer-computed fields at the end
-            row["Score"] = f"{e.get('optimal_score', 0)}/100"
+                # Add optimizer-computed fields at the end
+                row["Score"] = f"{e.get('optimal_score', 0)}/100"
 
-            if show_ai_explanations:
-                row["AI Explanation"] = e.get("ai_explanation", e.get("reason", ""))
-            else:
-                row["Reason"] = e.get("reason", "Close to route and early OK")
-            early_data.append(row)
+                if show_ai_explanations:
+                    row["AI Explanation"] = e.get("ai_explanation", e.get("reason", ""))
+                else:
+                    row["Reason"] = e.get("reason", "Close to route and early OK")
+                early_data.append(row)
 
-        early_df = pd.DataFrame(early_data)
-        st.dataframe(early_df, width="stretch")
-    else:
-        st.info("No orders recommended for early delivery")
+            early_df = pd.DataFrame(early_data)
+            st.dataframe(early_df, use_container_width=True)
 
-    # Display Reschedule and Cancel orders combined
-    st.subheader("🚫 DO NOT DELIVER in this window")
-    excluded_orders = []
+    # Reschedule expander (matches Multiple Windows UX)
+    if reschedule:
+        with st.expander(f"📅 Reschedule ({len(reschedule)} orders)", expanded=False):
+            reschedule_data = []
+            for r in reschedule:
+                # Create row with standard 7 fields
+                row = create_standard_row(r)
 
-    for r in reschedule:
-        # Create row with Action + standard 7 fields
-        row = {"Action": "📅 Reschedule"}
-        row.update(create_standard_row(r))
+                # Add optimizer-computed fields at the end
+                row["Score"] = f"{r.get('optimal_score', 0)}/100"
 
-        # Add optimizer-computed fields at the end
-        row["Score"] = f"{r.get('optimal_score', 0)}/100"
+                if show_ai_explanations:
+                    row["AI Explanation"] = r.get("ai_explanation", r.get("reason", ""))
+                else:
+                    row["Reason"] = r.get("reason", "Better fit in different window")
+                reschedule_data.append(row)
 
-        if show_ai_explanations:
-            row["AI Explanation"] = r.get("ai_explanation", r.get("reason", ""))
-        else:
-            row["Reason"] = r.get("reason", "Better fit in different window")
-        excluded_orders.append(row)
+            reschedule_df = pd.DataFrame(reschedule_data)
+            st.dataframe(reschedule_df, use_container_width=True)
 
-    for c in cancel:
-        # Create row with Action + standard 7 fields
-        row = {"Action": "❌ Cancel"}
-        row.update(create_standard_row(c))
+    # Cancel expander (matches Multiple Windows UX)
+    if cancel:
+        with st.expander(f"❌ Cancel ({len(cancel)} orders)", expanded=False):
+            cancel_data = []
+            for c in cancel:
+                # Create row with standard 7 fields
+                row = create_standard_row(c)
 
-        # Add optimizer-computed fields at the end
-        row["Score"] = f"{c.get('optimal_score', 0)}/100"
+                # Add optimizer-computed fields at the end
+                row["Score"] = f"{c.get('optimal_score', 0)}/100"
 
-        if show_ai_explanations:
-            row["AI Explanation"] = c.get("ai_explanation", c.get("reason", ""))
-        else:
-            row["Reason"] = c.get("reason", "Too far from cluster")
-        excluded_orders.append(row)
+                if show_ai_explanations:
+                    row["AI Explanation"] = c.get("ai_explanation", c.get("reason", ""))
+                else:
+                    row["Reason"] = c.get("reason", "Too far from cluster")
+                cancel_data.append(row)
 
-    if excluded_orders:
-        excluded_df = pd.DataFrame(excluded_orders)
-        st.dataframe(excluded_df, width="stretch")
-
-        # Summary counts
-        col1, col2 = st.columns(2)
-        with col1:
-            st.caption(f"📅 {len(reschedule)} orders to reschedule")
-        with col2:
-            st.caption(f"❌ {len(cancel)} orders to cancel")
-    else:
-        st.info("All orders are being kept or delivered early")
+            cancel_df = pd.DataFrame(cancel_data)
+            st.dataframe(cancel_df, use_container_width=True)
 
 
 def check_password() -> bool:
@@ -899,6 +908,14 @@ def main():
     # Parse CSV if uploaded
     if uploaded_file:
         try:
+            # Check if this is a new file upload - reset states if so
+            current_filename = uploaded_file.name if hasattr(uploaded_file, 'name') else None
+            if current_filename and st.session_state.get('last_uploaded_filename') != current_filename:
+                # New file uploaded - reset configuration
+                st.session_state.window_capacities_config = {}
+                st.session_state.optimization_complete = False  # Re-enable editing
+                st.session_state.last_uploaded_filename = current_filename
+
             orders, window_minutes = parser.parse_csv(uploaded_file)
         except Exception as e:
             st.sidebar.error(f"❌ Error parsing CSV: {str(e)}")
@@ -1548,13 +1565,16 @@ def main():
             from allocator import window_label
             window_labels_list = [window_label(start, end) for start, end in sorted_windows]
 
-            st.markdown("---")
-            st.subheader("🚛 Configure Capacity Per Window")
+            # Capacity Configuration - Collapsible like Order Preview
+            optimization_complete = st.session_state.get('optimization_complete', False)
 
-            # Build capacity configuration table
             from datetime import datetime, time as dt_time
             capacity_data = []
             window_times_map = {}  # Store original window times for matching orders later
+
+            # Initialize session state for capacities if not exists
+            if 'window_capacities_config' not in st.session_state:
+                st.session_state.window_capacities_config = {}
 
             for i, (win_start, win_end) in enumerate(sorted_windows):
                 label = window_labels_list[i]
@@ -1568,8 +1588,12 @@ def main():
                 end_minutes = win_end.hour * 60 + win_end.minute
                 window_length = end_minutes - start_minutes
 
-                utilization = round((total_units / 300) * 100, 1) if 300 > 0 else 0
-                status = "🟢" if total_units <= 300 else "🔴"
+                # Get capacity from session state or use default
+                capacity = st.session_state.window_capacities_config.get(label, 300)
+
+                # Calculate utilization and status based on current capacity (reactive)
+                utilization = round((total_units / capacity) * 100, 1) if capacity > 0 else 0
+                status = "🟢" if total_units <= capacity else "🔴"
 
                 capacity_data.append({
                     "Window": label,  # Keep for internal use but hide in display
@@ -1578,7 +1602,7 @@ def main():
                     "Length (min)": window_length,
                     "Orders": len(window_orders),
                     "Units": total_units,
-                    "Capacity": 300,  # Default capacity
+                    "Capacity": capacity,  # Use stored or default capacity
                     "Utilization %": utilization,
                     "Status": status
                 })
@@ -1586,71 +1610,91 @@ def main():
                 # Store mapping for later
                 window_times_map[label] = (win_start, win_end)
 
-            # Create editable dataframe
+            # Create dataframe
             capacity_df = pd.DataFrame(capacity_data)
 
-            # Show editable capacity table
-            edited_df = st.data_editor(
-                capacity_df,
-                width='stretch',
-                hide_index=True,
-                column_config={
-                    "Window": None,  # Hide this column
-                    "Start": st.column_config.TimeColumn(
-                        "Start",
-                        format="hh:mm a",
-                        width="small",
-                        help="Edit window start time"
-                    ),
-                    "End": st.column_config.TimeColumn(
-                        "End",
-                        format="hh:mm a",
-                        width="small",
-                        help="Edit window end time"
-                    ),
-                    "Length (min)": st.column_config.NumberColumn(
-                        "Length (min)",
-                        disabled=True,
-                        width="small",
-                        help="Calculated from Start/End"
-                    ),
-                    "Orders": st.column_config.NumberColumn(
-                        "Orders",
-                        disabled=True,
-                        width="small"
-                    ),
-                    "Units": st.column_config.NumberColumn(
-                        "Units",
-                        disabled=True,
-                        width="small"
-                    ),
-                    "Capacity": st.column_config.NumberColumn(
-                        "Capacity",
-                        min_value=50,
-                        max_value=500,
-                        step=10,
-                        width="small",
-                        help="Set capacity for this window"
-                    ),
-                    "Utilization %": st.column_config.NumberColumn(
-                        "Utilization %",
-                        disabled=True,
-                        width="small"
-                    ),
-                    "Status": st.column_config.TextColumn(
-                        "Status",
-                        disabled=True,
-                        width="small"
-                    )
-                },
-                key="capacity_editor"
-            )
+            # BEFORE optimization: editable capacity configuration
+            if not optimization_complete:
+                with st.expander("🚛 Configure Capacity Per Window", expanded=True):
+                    st.markdown("Set vehicle capacity for each delivery window. Capacity determines how many units can be delivered.")
 
-            # Extract capacities from edited dataframe
+                    # Show editable capacity table
+                    edited_df = st.data_editor(
+                        capacity_df,
+                        width='stretch',
+                        hide_index=True,
+                        column_config={
+                            "Window": None,  # Hide this column
+                            "Start": st.column_config.TimeColumn(
+                                "Start",
+                                format="hh:mm a",
+                                width="small",
+                                help="Edit window start time"
+                            ),
+                            "End": st.column_config.TimeColumn(
+                                "End",
+                                format="hh:mm a",
+                                width="small",
+                                help="Edit window end time"
+                            ),
+                            "Length (min)": st.column_config.NumberColumn(
+                                "Length (min)",
+                                disabled=True,
+                                width="small",
+                                help="Calculated from Start/End"
+                            ),
+                            "Orders": st.column_config.NumberColumn(
+                                "Orders",
+                                disabled=True,
+                                width="small"
+                            ),
+                            "Units": st.column_config.NumberColumn(
+                                "Units",
+                                disabled=True,
+                                width="small"
+                            ),
+                            "Capacity": st.column_config.NumberColumn(
+                                "Capacity",
+                                min_value=50,
+                                max_value=500,
+                                step=10,
+                                width="small",
+                                help="Set capacity for this window"
+                            ),
+                            "Utilization %": st.column_config.NumberColumn(
+                                "Utilization %",
+                                disabled=True,
+                                width="small"
+                            ),
+                            "Status": st.column_config.TextColumn(
+                                "Status",
+                                disabled=True,
+                                width="small"
+                            )
+                        },
+                        key="capacity_editor"
+                    )
+
+                    # Store edited capacities in session state
+                    for _, row in edited_df.iterrows():
+                        label = row["Window"]
+                        capacity_value = int(row["Capacity"])
+                        # Store in session state to persist and trigger reactive recalculation
+                        st.session_state.window_capacities_config[label] = capacity_value
+
+            # AFTER optimization: collapsed read-only view
+            else:
+                with st.expander("🚛 Configure Capacity Per Window", expanded=False):
+                    st.markdown("📌 Capacity configuration is locked after optimization. Re-upload CSV to make changes.")
+                    st.dataframe(capacity_df, use_container_width=True)
+
+            # Build window_capacities from session state (source of truth for optimization)
             window_capacities = {}
-            for _, row in edited_df.iterrows():
-                label = row["Window"]
-                window_capacities[label] = int(row["Capacity"])
+            for label in window_labels_list:
+                window_capacities[label] = st.session_state.window_capacities_config.get(label, 300)
+
+            # Add horizontal line after configuration sections
+            st.markdown("---")
 
         # Run optimization execution starts here
         try:
@@ -2186,25 +2230,23 @@ def main():
                             density_orders_count = optimizations['high_density']['orders_kept']
                             tab_options.append(f"🎯 Cut 3: High Density ({density_orders_count} Orders)")
 
+                        st.markdown("---")
+
+                        # Cut selector with integrated help text
                         selected_tab = st.selectbox(
-                            "Select View:",
+                            "Select Optimization Strategy:",
                             options=tab_options,
                             index=st.session_state.active_tab,
                             key="tab_selector",
-                            label_visibility="collapsed"
+                            help="Cut 1: Maximizes orders delivered within constraints (RECOMMENDED) | Cut 2: Optimizes for shortest route with 80-90% capacity | Cut 3: Maximizes delivery density in tight clusters"
                         )
 
                         # Update active tab in session state
                         st.session_state.active_tab = tab_options.index(selected_tab)
 
-                        st.markdown("---")
-
                         # TAB 1: MAX ORDERS (RECOMMENDED - default view)
                         if st.session_state.active_tab == 0:
                             opt = optimizations['max_orders']
-                            st.info(f"**Cut 1 - Max Orders on Time (RECOMMENDED)**: Maximizes number of orders delivered within constraints - **{opt['orders_kept']} orders, {opt['total_units']} units ({opt['load_factor']:.0f}%), {opt['route_miles']:.1f} miles, {opt['total_time']} min**")
-
-                            st.markdown("---")
 
                             display_optimization_results(
                                 keep=opt['keep'],
@@ -2227,7 +2269,6 @@ def main():
                         # TAB 2: SHORTEST ROUTE (only if Cut 2 was run)
                         elif st.session_state.active_tab == 1 and 'shortest' in optimizations:
                             opt = optimizations['shortest']
-                            st.info(f"**Cut 2 - Shortest Route (Efficiency-Based)**: Selects most efficient orders (high units/distance) targeting 80-90% capacity - **{opt['orders_kept']} orders, {opt['total_units']} units ({opt['load_factor']:.0f}%), {opt['route_miles']:.1f} miles, {opt['total_time']} min**")
 
                             display_optimization_results(
                                 keep=opt['keep'],
@@ -2254,7 +2295,6 @@ def main():
                             expected_tab_index = 1 if 'shortest' not in optimizations else 2
                             if st.session_state.active_tab == expected_tab_index:
                                 opt = optimizations['high_density']
-                                st.info(f"**Cut 3 - High Density Cluster**: Selects tightly grouped orders to maximize density within cluster - **{opt['orders_kept']} orders, {opt['total_units']} units ({opt['load_factor']:.0f}%), {opt['route_miles']:.1f} miles, {opt['total_time']} min**")
 
                                 display_optimization_results(
                                     keep=opt['keep'],
@@ -2745,25 +2785,23 @@ Be concise but thorough. Focus on actionable insights."""
                     density_orders_count = optimizations['high_density']['orders_kept']
                     tab_options.append(f"🎯 Cut 3: High Density ({density_orders_count} Orders)")
 
+                st.markdown("---")
+
+                # Cut selector with integrated help text
                 selected_tab = st.selectbox(
-                    "Select View:",
+                    "Select Optimization Strategy:",
                     options=tab_options,
                     index=st.session_state.active_tab,
                     key="cached_tab_selector",
-                    label_visibility="collapsed"
+                    help="Cut 1: Maximizes orders delivered within constraints (RECOMMENDED) | Cut 2: Optimizes for shortest route with 80-90% capacity | Cut 3: Maximizes delivery density in tight clusters"
                 )
 
                 # Update active tab in session state
                 st.session_state.active_tab = tab_options.index(selected_tab)
 
-                st.markdown("---")
-
                 # TAB 1: MAX ORDERS (RECOMMENDED - default view)
                 if st.session_state.active_tab == 0:
                     opt = optimizations['max_orders']
-                    st.info(f"**Cut 1 - Max Orders on Time (RECOMMENDED)**: Maximizes number of orders delivered within constraints - **{opt['orders_kept']} orders, {opt['total_units']} units ({opt['load_factor']:.0f}%), {opt['route_miles']:.1f} miles, {opt['total_time']} min**")
-
-                    st.markdown("---")
 
                     display_optimization_results(
                         keep=opt['keep'],
