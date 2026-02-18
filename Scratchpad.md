@@ -1,10 +1,7 @@
 Scratchpad
 
-I want to clean up the loading indicators, debug messages, and status messages across the UX, right now these show up in various places and clutter the UX with unecessary messages for dispatchers. I'm thinking of first cleaning these up, second moving any REQUIRED debug or status messages into a new AI chat section that should be standardized for both the One WIndow and Multiple Window optimization modes, and outputting loading information and AI messages in that window. I envision this living in the side bar after run optimization is hit the chat will take up the the majority of the side bar collapsing into a Buncher Workflow section so the dispatcher can chat with the assitatnt to understand why the optimizer and buncher made certain decisions and provide reccomendations that the dispatcher should think through for final dispatch use askuserquestion tool
+I
 
-
-
-4) We should clean up the debug messages across the entire UX, remove unecessary messages and improve the input heierachy, help me think through what could be improved here
 
 2) I want to consolidate the UX for the AI chat, and think we could move it into the sidebar, the AI results will be beside the output of the system and can be easily accessed, this should be the case for both single window and multi window optimizaitons, mutli window ai should be functioning very similar to the single window AI, can you help me think through this?
 
@@ -32,7 +29,16 @@ REFACTOR CODE WHEREVER OPPORTUNITY EXSISTS
 
 
 
-# Changes 2/18
+# Completed 2/18
+
+(DONE) 2) I want to consolidate the UX for the AI chat, and think we could move it into the sidebar, the AI results will be beside the output of the system and can be easily accessed, this should be the case for both single window and multi window optimizaitons, mutli window ai should be functioning very similar to the single window AI, can you help me think through this?
+
+(DONE) 4) We should clean up the debug messages across the entire UX, remove unecessary messages and improve the input heierachy, help me think through what could be improved here
+
+(DONE)  can you make the tool more on brand using the following color sheet?
+
+(DONE) I want to clean up the loading indicators, debug messages, and status messages across the UX, right now these show up in various places and clutter the UX with unecessary messages for dispatchers. I'm thinking of first cleaning these up, second moving any REQUIRED debug or status messages into a new AI chat section that should be standardized for both the One WIndow and Multiple Window optimization modes, and outputting loading information and AI messages in that window. I envision this living in the side bar after run optimization is hit the chat will take up the the majority of the side bar collapsing into a Buncher Workflow section so the dispatcher can chat with the assitatnt to understand why the optimizer and buncher made certain decisions and provide reccomendations that the dispatcher should think through for final dispatch use askuserquestion tool
+
 If an order is pushed later or rescheduled because the optimized route no longer has enough time for that order, the reason should clearly reflect that, upon testing a 29 unit order was pushed out of an earlier window to a later window even though the route had enough capacity im assuming this is because of a time constraint
 
 Here is the specific example, 
@@ -123,7 +129,7 @@ after basic capacity optimizations are done, the tool should look at making sure
 
 
 
-# Changes 2/17
+# Completed 2/17
 
 ## Metrics and KPI's updates :
 We're refining the post‑optimization UX for Multiple Windows Optimization so dispatchers can clearly see where every order ended up after optimization is complete.

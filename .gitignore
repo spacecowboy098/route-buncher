@@ -44,3 +44,4 @@ Thumbs.db
 uploads/
 *.csv
 !sample_orders.csv
+Scratchpad.md
