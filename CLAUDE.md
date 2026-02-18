@@ -1,620 +1,323 @@
-# Claude AI Integration Guide
+# Route Buncher — Developer Guide
 
-Complete guide to the AI-powered features in The Buncher route optimizer.
+Complete reference for working on The Buncher route optimizer codebase.
 
 ---
 
-## Overview
+## Running the App
 
-The Buncher integrates Claude AI (Anthropic) to provide intelligent explanations, validation, and interactive assistance for route optimization decisions. The AI features are **optional** - the optimizer works perfectly without them, but AI adds valuable insights for dispatchers.
+```bash
+python3 -m streamlit run app.py
+```
+
+Runs at `http://localhost:8501`. No build step required.
+
+**Environment setup** — create a `.env` file in the project root:
+```env
+ANTHROPIC_API_KEY=sk-ant-api03-xxxxxxxxxxxxx   # optional, enables AI features
+GOOGLE_MAPS_API_KEY=AIzaSy...                   # optional, enables real geocoding
+DEPOT_ADDRESS=3710 Dix Hwy Lincoln Park, MI 48146
+DEFAULT_VEHICLE_CAPACITY=300
+REQUIRE_AUTH=false                              # disable password for local dev
+TEST_MODE=true                                  # skip API calls during development
+```
+
+When `TEST_MODE=true` (the default), all Google Maps and Anthropic API calls are skipped and mock data is used instead — zero cost during development.
+
+---
+
+## File Structure
+
+| File | Purpose |
+|------|---------|
+| `app.py` | Main Streamlit UI (~3,483 lines) |
+| `allocator.py` | Cross-window order allocation (multi-pass logic) |
+| `optimizer.py` | OR-Tools CVRPTW solver |
+| `disposition.py` | Order classification (KEEP / EARLY_DELIVERY / RESCHEDULE / CANCEL) |
+| `parser.py` | CSV ingestion and validation |
+| `geocoder.py` | Google Maps geocoding + distance matrix |
+| `chat_assistant.py` | Claude AI chat, validation, and order explanations |
+| `config.py` | Environment variable / Streamlit secrets access |
+| `utils.py` | Shared constants and helper functions |
+
+---
+
+## Architecture
+
+### Two Optimization Modes
+
+**One Window** — single-window CVRPTW:
+1. `parser.py` parses CSV → order list
+2. `geocoder.py` geocodes addresses + builds time matrix
+3. `optimizer.py` runs OR-Tools solver → `(kept, dropped_nodes)`
+4. `disposition.py` classifies dropped orders (KEEP/EARLY/RESCHEDULE/CANCEL)
+5. `chat_assistant.py` generates explanations and validates results (if AI enabled)
+6. Results stored in `st.session_state.optimization_results`
+
+**Multiple Windows** — allocator + per-window optimizer:
+1. `parser.py` parses CSV → order list
+2. `allocator.py` runs multi-pass allocation across windows → `AllocationResult`
+3. Per window: `geocoder.py` + `optimizer.py` + `disposition.py`
+4. `chat_assistant.py` validates per window (if AI enabled)
+5. Results stored in `st.session_state.full_day_results`
+
+After results are stored, `st.rerun()` is called and the cached section renders on the next run.
+
+### Session State Keys
+- `st.session_state.optimization_results` — One Window results dict
+- `st.session_state.full_day_results` — Multiple Windows results dict
+- `st.session_state.window_capacities_config` — per-window capacity overrides
+- `st.session_state.optimization_complete` — bool, controls sidebar collapse
+
+---
+
+## Key Modules
+
+### `utils.py` — Shared Foundation
+
+Constants used across modules:
+```python
+UNREACHABLE_TIME = 9999          # sentinel for unreachable routes
+EARTH_RADIUS_KM = 6371.0
+MOCK_BASE_LAT, MOCK_BASE_LNG    # Minneapolis area for mock geocoding
+DISTANCE_MATRIX_BATCH_SIZE = 10  # Google API batch limit
+TRUTHY_VALUES = {"yes", "y", "true", "1"}
+EARLY_DELIVERY_THRESHOLD_MINUTES = 10
+RESCHEDULE_THRESHOLD_MINUTES = 20
+```
+
+Helpers:
+- `parse_reschedule_count(order)` — safely parses `priorRescheduleCount` field
+- `parse_boolean(value)` — handles None/NaN/string booleans from CSV
+- `create_classified_order(order, category, reason, score, **extras)` — builds disposition dict
+- `create_numbered_marker_html(stop_number, color, size=30)` — Folium DivIcon HTML
+
+### `config.py` — Configuration
+
+Key exports:
+- `DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-5-20250929"` — single source of truth for AI model
+- `get_secret(key, default)` — reads from Streamlit secrets (cloud) or `.env` (local)
+- `is_test_mode()` — checks runtime override first, then `TEST_MODE` env var
+- `set_test_mode(enabled)` — runtime override from UI checkbox
+- `is_ai_enabled()` — False if test mode or no API key
+
+### `allocator.py` — Multi-Window Allocation
+
+`allocate_orders_across_windows(orders, windows, window_capacities, ...)` runs 6 sequential passes:
+- Pre-pass: filter oversized orders
+- Pass 1: lock priority customers to original window
+- Pass 2: move early-eligible orders to earlier windows
+- Pass 3: assign orders to original window
+- Pass 4: handle overflow (large orders above reschedule threshold)
+- Pass 5: rescue overflow into later windows
+- Pass 6: place deferred large orders
+
+Returns `AllocationResult` dataclass with `kept_in_window`, `moved_early`, `moved_later`, `reschedule`, `cancel`, `orders_by_window`.
+
+Key helpers: `window_label(start, end)`, `window_duration_minutes(start, end)` — also used by `app.py`.
+
+### `optimizer.py` — OR-Tools Solver
+
+`solve_route(time_matrix, demands, vehicle_capacity, max_route_time, service_times, drop_penalty)` → `(kept_orders, dropped_nodes)`
+
+Constants (tunable):
+```python
+SERVICE_TIME_BASE = 1.6
+SERVICE_TIME_EXPONENT = 1.3
+SERVICE_TIME_COEFFICIENT = 0.045
+SERVICE_TIME_CAP = 7              # max minutes per stop
+DEFAULT_SLACK_MINUTES = 30
+SOLVER_TIME_LIMIT_SECONDS = 5
+```
+
+`service_time_for_units(units)` — smart service time calculation used when `SERVICE_TIME_METHOD=smart`.
+
+### `disposition.py` — Order Classification
+
+`classify_orders(all_orders, kept, dropped_nodes, time_matrix)` → `(keep, early, reschedule, cancel)`
+
+Classification thresholds (from `utils.py`):
+- `< EARLY_DELIVERY_THRESHOLD_MINUTES (10)` and `early_ok=True` → EARLY_DELIVERY
+- `< RESCHEDULE_THRESHOLD_MINUTES (20)` → RESCHEDULE
+- `>= 20 min` → CANCEL
+
+Uses `create_classified_order()` from `utils.py` for all output dicts.
+
+### `chat_assistant.py` — AI Integration
+
+Model is controlled by `DEFAULT_CLAUDE_MODEL` from `config.py` — **do not hardcode model strings here**.
+
+Token limits:
+```python
+MAX_TOKENS_CHAT = 1500
+MAX_TOKENS_VALIDATION = 800
+MAX_TOKENS_EXPLANATION = 2000
+```
+
+Key functions:
+- `create_context_for_ai(...)` — builds the system context string with full route details
+- `chat_with_assistant(messages, context, api_key)` — sends chat to Claude API
+- `validate_optimization_results(...)` — AI validates a completed route
+- `generate_order_explanations(...)` — AI generates per-order disposition reasons
+- `call_claude_api(prompt, api_key)` — simple single-prompt helper
+
+In test mode, `generate_mock_validation()` and `generate_mock_order_explanations()` are used instead of API calls. Mock explanations use the `MOCK_EXPLANATIONS` dict.
+
+Internal helpers:
+- `_sort_kept_orders(keep)` — sort by `sequence_index`
+- `_calculate_total_route_time(keep, time_matrix)` — depot → stops → depot drive time
+
+### `parser.py` — CSV Ingestion
+
+Supports two formats detected automatically:
+- **New format**: `externalOrderId`, `customerID`, `address`, `numberOfUnits`, `earlyEligible`, `deliveryWindow`
+- **Legacy format**: `orderID`, `customer_name`, `delivery_address`, `number_of_units`, `early_ok`, `delivery_window_start` + `delivery_window_end`
+
+Optional fields stored verbatim from CSV are defined in `OPTIONAL_ORDER_FIELDS` (module-level constant).
+
+Uses `parse_boolean()` from `utils.py` for `earlyEligible` field.
+
+### `geocoder.py` — Geocoding & Distance Matrix
+
+In test mode, uses deterministic mock functions:
+- `_mock_geocode_addresses()` — uses `MOCK_BASE_LAT/LNG` + address hash seed
+- `_mock_build_time_matrix()` — Haversine distances at 30 km/h
+- `_mock_get_route_polylines()` — straight lines between waypoints
+
+Real mode uses Google Maps APIs in batches of `DISTANCE_MATRIX_BATCH_SIZE = 10`.
+
+---
+
+## `app.py` — UI Structure
+
+### Top-Level Imports
+All imports are at module level — no inline imports inside functions. Key ones:
+```python
+from allocator import window_duration_minutes, window_label, allocate_orders_across_windows
+from chat_assistant import call_claude_api
+from utils import create_numbered_marker_html
+import folium
+from folium import plugins
+```
+
+### Module-Level Helpers (before `main()`)
+- `format_time_minutes(minutes)` — formats int as "HH:MM"
+- `extract_all_csv_fields(order)` — extracts displayable CSV fields (excludes internal fields)
+- `create_standard_row(order)` — builds the 7-field standard row dict for dataframes
+- `_initialize_folium_map(center_lat, center_lon, use_google_tiles)` — creates base map
+- `_add_route_polylines(m, addresses, waypoint_order, ...)` — draws route line
+- `_add_route_markers(m, keep, early, reschedule, cancel, ...)` — adds all stop markers
+- `create_map_visualization(...)` — single-window map
+- `create_multi_window_map(...)` — multi-window color-coded map; uses `ROUTE_COLORS` constant
+- `generate_route_explanation(...)` — template-based route explanation (no AI)
+- `display_optimization_results(...)` — renders KPIs, map, and order tables for one cut
+- `_calculate_route_times(kept, time_matrix, service_times)` — returns `{drive_time, service_time, total_time}`
+- `_get_explanation_field(order, show_ai, default_reason)` — returns `{"AI Explanation": ...}` or `{"Reason": ...}`
+- `_reorder_reason(df)` — moves 'Reason' column after 'numberOfUnits' in a DataFrame
+- `calc_route_metrics(kept_orders, kept_nodes_data, service_times, time_matrix, vehicle_capacity)` — returns metrics dict
+- `check_password()` — Streamlit password gate
+- `main()` — main app entry point (~2,600 lines, contains sidebar + both optimization modes)
+
+### Constants
+```python
+ROUTE_COLORS = ['#FF0000', '#0000FF', '#00C800', '#FF00FF', '#FFA500', '#00FFFF', '#FF1493', '#8B4513']
+```
+
+### Brand Colors (Buncha palette)
+```
+Banana: #FFE475 | Sprout: #40D689 | Gumball: #5DA9E9
+Eggplant: #100E3A | Tang: #F5A874 | Tart: #D4634C
+```
+CSS is injected at top of `main()` via `st.markdown(unsafe_allow_html=True)`.
 
 ---
 
 ## AI Features
 
-### 1. **Route Validation & Explanation**
+AI features are **optional** — the optimizer works without them. When enabled (live mode + API key), Claude AI provides:
 
-When you run optimization with AI enabled, Claude analyzes the results and provides:
+1. **Route Validation** — validates math and logic after optimization
+2. **Order Explanations** — per-order reasons for disposition
+3. **Interactive Chat** — dispatcher Q&A about any cut
 
-- **Math Validation**: Confirms capacity and time constraints are respected
-- **Logic Verification**: Explains why specific orders were kept or dropped
-- **Strategic Insights**: Why this particular route is optimal
-- **Risk Assessment**: Flags tight margins or edge cases to watch
+### Changing the AI Model
 
-**Example Output:**
+Change `DEFAULT_CLAUDE_MODEL` in `config.py`:
+```python
+DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-5-20250929"   # current default
+# DEFAULT_CLAUDE_MODEL = "claude-opus-4-6"            # more capable
+# DEFAULT_CLAUDE_MODEL = "claude-haiku-4-5-20251001"  # fastest/cheapest
 ```
-✅ Route validation confirms all constraints met. The optimizer kept 14 orders
-(78 units, 98% capacity) within the 120-minute window. Orders were dropped
-due to geographic isolation - the 3 cancelled orders average 22+ minutes from
-the cluster, making them cost-prohibitive to serve. The route operates at
-92% time utilization, leaving minimal buffer but maximizing delivery efficiency.
-```
+This propagates automatically to all `chat_assistant.py` API calls.
 
-### 2. **Interactive Chat Assistant**
+### Customizing AI Prompts
 
-After optimization, you can ask Claude questions about the route:
-
-**Common Questions:**
-- "Why is order #70592 not included?"
-- "Can you add back order #70610?"
-- "What would happen if I remove order #70509?"
-- "Which rescheduled orders are closest to the route?"
-- "How can I fit more orders in this route?"
-
-**What the AI Knows:**
-- Every order's address, units, and delivery window
-- Exact distances between all stops
-- Current capacity and time utilization
-- Why each order received its disposition (KEEP/EARLY/RESCHEDULE/CANCEL)
-- Geographic clusters and route efficiency metrics
-
-**What the AI Can Do:**
-- Explain specific optimization decisions with data
-- Estimate feasibility of adding orders back (capacity + geography)
-- Calculate impact of removing orders from the route
-- Suggest which dropped orders are easiest to add
-- Answer "what if" scenarios
-
-**What the AI Cannot Do:**
-- Modify the route (you must re-run optimization or use Cut 4: Dispatcher Sandbox)
-- Override physical constraints (capacity, time windows)
-- Access real-time traffic data
+Prompts live in `chat_assistant.py`:
+- `create_context_for_ai()` — system context (role, route data, capabilities)
+- `validate_optimization_results()` — validation prompt
+- `generate_order_explanations()` — per-order explanation prompt
 
 ---
 
-## How to Use AI Features
+## Test Mode
 
-### Setup (One-Time)
+Toggled via the **🧪 Test Mode** checkbox in the sidebar (calls `config.set_test_mode()`), or via `TEST_MODE=true` in `.env`.
 
-1. **Get Anthropic API Key**:
-   - Go to [console.anthropic.com](https://console.anthropic.com/)
-   - Sign up or log in
-   - Navigate to **API Keys** → **Create Key**
-   - Copy your API key
+When enabled:
+- `geocoder.py` → uses mock functions (deterministic, hash-seeded per address)
+- `chat_assistant.py` → uses `generate_mock_*` functions (no API calls)
+- All UI features and routing logic work identically
+- **Cost: $0**
 
-2. **Add to .env File**:
-   ```env
-   ANTHROPIC_API_KEY=sk-ant-api03-xxxxxxxxxxxxx
-   ```
-
-3. **Restart the App**:
-   ```bash
-   streamlit run app.py
-   ```
-
-### Optional: Disable Authentication (Development Only)
-
-For local development, you can bypass password authentication:
-
-1. **Add to .env File**:
-   ```env
-   REQUIRE_AUTH=false
-   ```
-
-2. **Restart the App**:
-   ```bash
-   streamlit run app.py
-   ```
-
-**⚠️ Security Warning**: Only use this in local development environments. Never disable authentication in shared or production deployments.
+Default is `TEST_MODE=true` to prevent accidental API charges.
 
 ---
 
-### Running Optimization
+## Disposition Classification Thresholds
 
-The app now has a simplified interface with **one button** and a **test mode toggle**:
+Defined in `utils.py`, used in `disposition.py`:
 
-**🚀 Run Optimization** - Single button for all optimizations:
-- AI features enabled **by default** when API key is configured
-- Route validation and explanation
-- AI-generated order disposition reasons
-- Interactive chat assistant enabled
-- Takes ~5-10 seconds with AI, ~2-5 seconds without
-- Costs ~$0.01-0.05 per optimization (when AI enabled)
+| Threshold | Value | Meaning |
+|-----------|-------|---------|
+| `EARLY_DELIVERY_THRESHOLD_MINUTES` | 10 min | Max cluster distance for early delivery eligibility |
+| `RESCHEDULE_THRESHOLD_MINUTES` | 20 min | Below this → reschedule; at/above → cancel |
 
-**🧪 Test Mode Toggle** - Cost-free development mode:
-- **Enable this checkbox** to skip both Maps API and AI API
-- Uses mock geocoding (estimated straight-line distances)
-- Uses generic AI responses (no API calls)
-- Zero API costs - perfect for testing and debugging
-- All features work, just with simulated data
-
-**Status Indicators**:
-- ✅ **Green "AI Features Enabled"**: API key configured, AI active
-- ℹ️ **Blue "AI Disabled (No API Key)"**: No API key, optimization still works
-- ⚠️ **Orange "Test Mode Active"**: Using mock data, zero API costs
-
-**Recommendation**:
-- Use **Test Mode ON** during development, testing, and debugging
-- Use **Test Mode OFF** for final routes with real geocoding and AI analysis
-
----
-
-## Test Mode: Cost-Free Development
-
-Test Mode is a powerful feature that allows you to develop and test routes without incurring any API costs.
-
-### What Test Mode Does
-
-When **🧪 Test Mode** is enabled:
-
-1. **Skips Google Maps API**:
-   - Uses mock geocoding with estimated straight-line distances
-   - No geocoding API calls = $0 cost
-   - Perfect for testing CSV parsing, UI, and routing logic
-
-2. **Skips Anthropic AI API**:
-   - Uses generic template responses instead of AI analysis
-   - No Claude API calls = $0 cost
-   - All AI features work, just with simulated responses
-
-3. **Maintains Full Functionality**:
-   - Routing algorithm works identically
-   - All UI features available
-   - Maps render (with mock data)
-   - Order disposition works
-   - Optimization completes successfully
-
-### When to Use Test Mode
-
-✅ **Use Test Mode When**:
-- Developing new features
-- Testing CSV file formats
-- Debugging routing issues
-- Training new team members
-- Rapid iteration during configuration
-- Running automated tests
-- You don't have API keys configured
-
-❌ **Disable Test Mode When**:
-- Creating production routes for drivers
-- Need accurate drive times and distances
-- Want detailed AI explanations
-- Presenting routes to management/customers
-
-### Cost Savings Example
-
-**Without Test Mode** (100 test runs during development):
-- Google Maps API: ~$2-5
-- Anthropic AI API: ~$3-7
-- **Total**: ~$5-12
-
-**With Test Mode** (100 test runs):
-- Google Maps API: $0
-- Anthropic AI API: $0
-- **Total**: **$0** 🎉
-
-Once development is complete, disable Test Mode for final validation with real data.
-
----
-
-## AI Chat Usage
-
-### Starting a Conversation
-
-After running optimization with AI:
-
-1. Navigate to any Cut tab (Cut 1, 2, 3, or 4)
-2. Scroll to the **"💬 Chat Assistant"** section
-3. Type your question in the text input
-4. Click **Send** or press Enter
-
-### Best Practices
-
-**Be Specific with Order Numbers:**
-- ✅ "Why was order #70592 dropped?"
-- ❌ "Why were some orders dropped?"
-
-**Ask One Question at a Time:**
-- ✅ "Can you add back order #70610?"
-- ❌ "Can you add back orders #70610, #70611, and #70612 and also remove order #70509?"
-
-**Reference Actual Data:**
-- The AI has the exact optimization context
-- It knows distances, capacities, and constraints
-- You don't need to re-explain the route
-
-**Follow Up Naturally:**
-- "What about order #70611?"
-- "How much capacity would that free up?"
-- "Which orders are closest to the cluster?"
-
-### Example Conversation
-
-```
-Dispatcher: Why was order #70610 not included?
-
-Claude: Order #70610 (15 units, Plymouth delivery) was recommended for
-rescheduling because it's located 14.2 minutes from the main route cluster.
-Adding it would increase route time by ~28 minutes (drive there + back to route),
-which exceeds your remaining time buffer of 9 minutes. The current route uses
-111/120 minutes (92.5%) of your delivery window.
-
-Dispatcher: Can you add it back if I remove order #70509?
-
-Claude: Yes, that swap would work. Removing order #70509 would free up:
-- 12 units of capacity (currently at 78/80 units, so margin is tight)
-- ~18 minutes of route time (it's stop #3, mid-route)
-
-Adding order #70610 (15 units) would exceed capacity by 3 units. You'd need
-to remove at least 15 units total. Consider removing both #70509 (12 units)
-and #70511 (8 units) to comfortably fit #70610.
-
-Reminder: Use Cut 4: Dispatcher Sandbox to test this manually, or re-run
-optimization after adjusting constraints.
-```
-
----
-
-## Understanding AI-Generated Explanations
-
-### Order Disposition Reasons
-
-When AI is enabled, each order gets a specific, context-aware reason:
-
-**KEEP Orders:**
-- "Optimal position in cluster, minimizes total drive time while fitting capacity constraints"
-- "High efficiency stop (22 units) in dense area, only 4 minutes from previous stop"
-- "Geographic anchor point - central to cluster, enables efficient sequencing"
-
-**EARLY Delivery:**
-- "Only 8 minutes from route cluster and customer approved early delivery"
-- "Could deliver 45 minutes early - customer indicated flexibility in delivery window"
-
-**RESCHEDULE:**
-- "15 minutes from cluster, would add significant time but could fit in adjacent window"
-- "Located on periphery of service area - better fit for tomorrow's northeast route"
-
-**CANCEL:**
-- "25+ minutes from route cluster, cost to serve exceeds delivery value"
-- "Geographic outlier - would require 40+ minute detour for 5-unit delivery"
-
-### Route Validation Insights
-
-AI validation checks for:
-
-**Constraint Compliance:**
-- Capacity: "78/80 units (97.5%)" ✅
-- Time: "111/120 minutes (92.5%)" ✅
-
-**Efficiency Metrics:**
-- "14 orders in 111 minutes = 7.6 deliveries/hour"
-- "Load factor 97.5% indicates excellent capacity utilization"
-
-**Strategic Assessment:**
-- "Tight time margin (9 min buffer) - minor delays could impact last 2 stops"
-- "Route prioritizes order count over travel efficiency, as expected for per-order revenue model"
-
-**Risk Flags:**
-- "⚠️ Order #70515 scheduled to arrive at 10:58 AM with window ending 11:00 AM - 2-minute buffer"
-- "✅ All stops have adequate service time buffer (3-7 minutes per stop)"
-
----
-
-## AI Model Information
-
-**Current Model**: Claude Sonnet 4.5 (`claude-sonnet-4-5-20250929`)
-
-**Why This Model:**
-- **Fast**: Responds in 2-5 seconds
-- **Cost-Effective**: ~$0.01-0.05 per full optimization
-- **Accurate**: Excellent at logistics reasoning and math validation
-- **Context**: Can handle full route details (100+ orders)
-
-**Token Usage:**
-- Route validation: ~500-800 tokens (~$0.01)
-- Chat message: ~300-500 tokens (~$0.005)
-- Order explanations: ~1000-2000 tokens (~$0.02)
-
-**Monthly Cost Estimate:**
-- 10 optimizations/day with AI = ~$3-5/month
-- 50 optimizations/day with AI = ~$15-25/month
-- Chat questions: negligible additional cost
+These are noted as "initial guesses" in comments — tune based on operational data.
 
 ---
 
 ## Troubleshooting
 
-### "⚠️ Chat assistant is not configured"
+**App won't start**: Check `.env` exists; `REQUIRE_AUTH=false` for dev.
 
-**Problem**: ANTHROPIC_API_KEY not found in .env file
+**"⚠️ Chat assistant is not configured"**: Add `ANTHROPIC_API_KEY` to `.env`.
 
-**Solution**:
-1. Create API key at [console.anthropic.com](https://console.anthropic.com/)
-2. Add to `.env`: `ANTHROPIC_API_KEY=sk-ant-api03-xxxxx`
-3. Restart app: `streamlit run app.py`
+**Maps not rendering**: Either `GOOGLE_MAPS_API_KEY` is missing (enable Test Mode) or geocoding failed for some addresses.
 
-### "❌ Error communicating with AI assistant"
+**Import errors after editing**: Run `python3 -c "import app"` to check for syntax errors without starting the full Streamlit server.
 
-**Possible Causes:**
-1. **Invalid API Key**: Check key format starts with `sk-ant-`
-2. **Rate Limit**: Wait 60 seconds and try again
-3. **Network Issue**: Check internet connection
-4. **API Quota**: Check usage at [console.anthropic.com](https://console.anthropic.com/)
-
-**Solution**: Verify API key in .env file, check Anthropic console for quota/status
-
-### AI Response Seems Wrong
-
-**Issue**: AI provides inaccurate information about orders
-
-**Cause**: This is rare but can happen if optimization data is corrupted
-
-**Solution**:
-1. Re-run the optimization
-2. Verify order data in CSV is correct
-3. Check that geocoding completed successfully
-4. If persistent, enable **Test Mode** to isolate routing logic from API issues
-
-### Chat Not Showing Up
-
-**Issue**: No chat section appears after optimization
-
-**Cause**: AI was not enabled during optimization run
-
-**Solution**: Ensure **Test Mode is disabled** to enable AI features (requires API key)
+**AI responses seem wrong**: Re-run optimization. If persistent, enable Test Mode to isolate the routing algorithm from API issues.
 
 ---
 
-## Privacy & Security
+## Security
 
-### What Data is Sent to Anthropic?
-
-When you use AI features, the following data is sent:
-
-**Route Optimization Context:**
-- Order IDs (e.g., #70592)
-- Customer names (if in CSV)
-- Delivery addresses
-- Unit counts
-- Time windows
-- Geographic distances
-- Optimization results (which orders kept/dropped)
-
-**NOT Sent:**
-- API keys (stored locally only)
-- Payment information
-- Historical order data
-- Driver information
-
-### Data Retention
-
-- **Anthropic Policy**: Data sent via API is not used to train models
-- **Retention**: Anthropic retains API data for 30 days for abuse monitoring, then deletes
-- **Compliance**: Anthropic is SOC 2 Type II certified, GDPR compliant
-
-### Security Best Practices
-
-1. **Protect API Keys**: Never commit .env to version control
-2. **Rotate Keys**: Generate new API keys every 3-6 months
-3. **Monitor Usage**: Check Anthropic console regularly for unexpected usage
-4. **Sensitive Data**: If orders contain PII, remove `ANTHROPIC_API_KEY` from .env to disable AI
+- Never commit `.env` to version control (it's in `.gitignore`)
+- `REQUIRE_AUTH=false` is for local dev only — always require auth in shared/production deployments
+- API keys are read via `config.get_secret()` which tries Streamlit secrets first, then env vars
 
 ---
 
-## API Usage Monitoring
-
-### Check Your Usage
-
-1. Go to [console.anthropic.com](https://console.anthropic.com/)
-2. Navigate to **Usage** dashboard
-3. View API calls, tokens used, and costs
-
-### Setting Spending Limits
-
-1. In Anthropic console, go to **Settings** → **Billing**
-2. Set **Monthly Spending Limit** (e.g., $50)
-3. Configure **Email Alerts** for 50%, 75%, 90% thresholds
-
-### Expected Usage
-
-**Per Optimization with AI:**
-- Route validation: ~700 tokens
-- Order explanations: ~1500 tokens
-- Total: ~2200 tokens (~$0.02-0.04)
-
-**Per Chat Message:**
-- Average: ~400 tokens (~$0.005)
-
-**Monthly Estimate:**
-- 20 optimizations + 50 chat messages = ~$1-2/month
-- 100 optimizations + 200 chat messages = ~$5-8/month
-
----
-
-## Advanced: Customizing AI Behavior
-
-### Modifying System Prompts
-
-AI prompts are in `chat_assistant.py`:
-
-**Route Validation Prompt** (line 221):
-- Controls what AI checks and validates
-- Adjust to emphasize specific metrics
-
-**Chat Context Prompt** (line 32):
-- Defines AI's role and capabilities
-- Customize for your business rules
-
-**Example Customization:**
-```python
-# In chat_assistant.py, line 32
-context = f"""You are an AI assistant helping a Buncha dispatcher...
-
-CUSTOM BUSINESS RULES:
-- Priority customers (IDs starting with 'VIP') should always be kept if possible
-- Orders >30 units are more profitable - weight these higher
-- Friday routes can run 15 minutes longer due to lighter traffic
-...
-"""
-```
-
-### Changing AI Model
-
-To use a different Claude model (e.g., Claude Opus for more complex reasoning):
-
-**In `chat_assistant.py`, lines 174 and 281:**
-```python
-# Current (Sonnet 4.5 - fast, cost-effective):
-model="claude-sonnet-4-5-20250929"
-
-# Alternative (Opus 4.5 - more capable, slower, more expensive):
-model="claude-opus-4-5-20251101"
-
-# Alternative (Haiku 3.5 - fastest, cheapest, less capable):
-model="claude-haiku-3-5-20241022"
-```
-
-**Model Comparison:**
-- **Sonnet 4.5** (default): Best balance of speed, accuracy, and cost
-- **Opus 4.5**: Use for complex multi-constraint scenarios or detailed analysis
-- **Haiku 3.5**: Use if cost is primary concern and questions are simple
-
----
-
-## Comparison: Test Mode vs Live Mode
-
-| Feature | 🧪 Test Mode | 🚀 Live Mode (AI Enabled) | 🚀 Live Mode (No API Key) |
-|---------|-------------|------------------------|--------------------------|
-| **Routing Logic** | Identical | Identical | Identical |
-| **Order Count** | Same | Same | Same |
-| **Route Sequence** | Same | Same | Same |
-| **Geocoding** | Mock (straight-line estimates) | Real Google Maps API | Real Google Maps API |
-| **Maps** | Mock data visualization | Google Maps road routes | Google Maps road routes |
-| **Optimization Time** | ~2-5 seconds | ~5-10 seconds | ~3-7 seconds |
-| **Route Validation** | ✅ Generic template | ✅ Detailed AI analysis | ❌ None |
-| **Order Reasons** | ✅ Generic | ✅ Specific, context-aware | ✅ Generic |
-| **Chat Assistant** | ❌ Not available | ✅ Full interactive Q&A | ❌ Not available |
-| **API Costs** | **$0** (No API calls) | ~$0.03-0.07 per run | ~$0.01-0.02 per run |
-| **Best For** | Testing, debugging, development | Final routes, training, auditing | Production without AI features |
-
----
-
-## FAQs
-
-**Q: Is AI required for the optimizer to work?**
-A: No. The routing algorithm (OR-Tools) works independently. AI only adds explanations and chat.
-
-**Q: Will AI make routing decisions?**
-A: No. AI only explains decisions made by the OR-Tools algorithm. It cannot override constraints or modify routes.
-
-**Q: Can I use AI in Cut 4: Dispatcher Sandbox?**
-A: Yes. After loading a cut and making manual edits, you can ask AI about the impact: "What happens if I move order #70510 to KEEP?"
-
-**Q: Does AI learn from my routes over time?**
-A: No. Each optimization is independent. AI doesn't retain memory between sessions per Anthropic's API policy.
-
-**Q: Can AI help with CSV formatting issues?**
-A: Not currently. AI only analyzes optimization results, not input data validation.
-
-**Q: What if Anthropic API is down?**
-A: AI features automatically disable if no API key is configured or if Test Mode is enabled. Routing works normally, you just won't get AI explanations.
-
-**Q: Can I use a different AI provider (OpenAI, etc.)?**
-A: Code currently only supports Anthropic. Contact maintainer if you need OpenAI integration.
-
----
-
-## Best Practices
-
-### When to Use AI
-
-**✅ Use AI When:**
-- Creating final routes for drivers
-- Training new dispatchers
-- Auditing optimization decisions
-- Investigating why orders were dropped
-- Explaining routes to customers/management
-- Exploring "what if" scenarios
-
-**⚡ Skip AI When:**
-- Testing different configurations rapidly
-- Running multiple iterations for debugging
-- Optimizing for high-volume operations (>100 routes/day)
-- Working with sensitive customer data
-- API quota is running low
-
-### Getting Better AI Responses
-
-1. **Be Specific**: Reference exact order IDs
-2. **One Topic**: Ask focused questions, not compound queries
-3. **Use Context**: AI knows the full route, no need to re-explain
-4. **Check KPIs First**: Many questions answered by metrics (capacity %, route time)
-5. **Iterate**: Ask follow-ups to drill deeper
-
-### Cost Optimization
-
-1. **Test in Test Mode First**: Enable **🧪 Test Mode** checkbox for cost-free configuration testing
-2. **Use AI for Finals**: Enable AI for routes you'll actually deploy
-3. **Batch Questions**: Ask multiple related questions in sequence rather than re-optimizing
-4. **Monitor Usage**: Set up spending alerts in Anthropic console
-5. **Choose Right Model**: Sonnet 4.5 is sufficient for 95% of use cases
-
----
-
-## Support
-
-### AI Feature Issues
-
-For AI-specific problems:
-- Check Anthropic status: [status.anthropic.com](https://status.anthropic.com)
-- Review API documentation: [docs.anthropic.com](https://docs.anthropic.com)
-- Verify API key at: [console.anthropic.com](https://console.anthropic.com)
-
-### General App Issues
-
-For routing or app problems:
-- See SETUP.md troubleshooting section
-- Check Google Maps API quota
-- Review logs in terminal where Streamlit is running
-
----
-
-## Future AI Features (Roadmap)
-
-Potential enhancements under consideration:
-
-- **Multi-Vehicle AI**: Explain trade-offs across multiple vehicle routes
-- **Historical Analysis**: "How does this route compare to last week?"
-- **Predictive Suggestions**: "Based on patterns, consider prioritizing orders in sector X"
-- **CSV Validation**: AI-powered data quality checks on upload
-- **Driver Feedback Loop**: Integrate actual route performance to improve predictions
-- **Voice Interface**: Ask questions via speech instead of typing
-
----
-
-## Recent Updates (v2.0 - February 2026)
-
-### UX Consolidation & Enhancements
-
-The app has been significantly improved with a unified, consistent user experience:
-
-**Simplified Controls**:
-- ✅ Single "🚀 Run Optimization" button (replaces dual AI buttons)
-- ✅ Test Mode toggle for cost-free development
-- ✅ Clear AI status indicators
-
-**Enhanced Maps**:
-- ✅ Multiple Windows mode now uses Google Maps polylines (actual road routes)
-- ✅ Numbered stop markers in all views
-- ✅ Consistent map quality between single and multiple window modes
-- ✅ Rich tooltips with window assignments
-
-**Multiple Windows Improvements**:
-- ✅ Per-window KPI dashboards (orders, capacity, time, efficiency)
-- ✅ Individual window maps in expanders
-- ✅ AI validation per window (when enabled)
-- ✅ Color-coded global map with legend
-
-**Test Mode**:
-- ✅ Unified test mode that skips BOTH Maps API and AI API
-- ✅ Zero API costs during development
-- ✅ All features work with simulated data
-
-For detailed testing instructions, see `TESTING_UX_CONSOLIDATION.md`.
-
----
-
-**Built with Claude AI by Anthropic**
-**Model**: Claude Sonnet 4.5 (February 2026)
-**Documentation Version**: 2.0
+## Recent Changes (February 2026)
+
+### Codebase Refactor
+
+- **New `utils.py`**: shared constants (`UNREACHABLE_TIME`, thresholds, etc.) and helpers (`parse_reschedule_count`, `parse_boolean`, `create_classified_order`, `create_numbered_marker_html`)
+- **`config.py`**: added `DEFAULT_CLAUDE_MODEL` and `_parse_bool()` helper
+- **`chat_assistant.py`**: model name centralized via `DEFAULT_CLAUDE_MODEL`; extracted `_sort_kept_orders()` and `_calculate_total_route_time()` helpers; added `MOCK_EXPLANATIONS` dict and `MAX_TOKENS_*` constants
+- **`allocator.py`**: `parse_reschedule_count()` replaces 3 duplicate parsing blocks
+- **`optimizer.py`**: service time and solver parameters extracted to named constants
+- **`disposition.py`**: uses `create_classified_order()` and threshold constants from `utils.py`
+- **`parser.py`**: uses `parse_boolean()` from `utils.py`; `OPTIONAL_ORDER_FIELDS` is now a module-level constant
+- **`geocoder.py`**: uses constants from `utils.py` for coordinates, Earth radius, batch size
+- **`app.py`**: all imports moved to module level; `_reorder_reason()` and `calc_route_metrics()` moved from nested to module level; added `_calculate_route_times()` and `_get_explanation_field()` helpers; `ROUTE_COLORS` constant added; numbered marker HTML deduped via `create_numbered_marker_html()`

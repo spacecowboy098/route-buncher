@@ -8,6 +8,13 @@ from config import get_google_maps_client, is_test_mode
 import polyline
 import random
 import math
+from utils import (
+    UNREACHABLE_TIME,
+    EARTH_RADIUS_KM,
+    MOCK_BASE_LAT,
+    MOCK_BASE_LNG,
+    DISTANCE_MATRIX_BATCH_SIZE,
+)
 
 
 # ============================================================================
@@ -27,10 +34,6 @@ def _mock_geocode_addresses(addresses: List[str]) -> List[Dict[str, any]]:
     Returns:
         List of dicts with mock lat/lng coordinates
     """
-    # Base coordinates (Minneapolis/St. Paul area as example)
-    base_lat = 44.9778
-    base_lng = -93.2650
-
     # Seed random with address hash for consistency
     results = []
     for i, address in enumerate(addresses):
@@ -39,15 +42,14 @@ def _mock_geocode_addresses(addresses: List[str]) -> List[Dict[str, any]]:
         seed = hash(address) % 10000
         random.seed(seed + i)
 
-        # Spread addresses within ~20km radius
-        # 0.1 degrees ≈ 11km at this latitude
+        # Spread addresses within ~20km radius (0.1 degrees ≈ 11km at this latitude)
         lat_offset = random.uniform(-0.1, 0.1)
         lng_offset = random.uniform(-0.1, 0.1)
 
         results.append({
             "address": address,
-            "lat": base_lat + lat_offset,
-            "lng": base_lng + lng_offset
+            "lat": MOCK_BASE_LAT + lat_offset,
+            "lng": MOCK_BASE_LNG + lng_offset
         })
 
     return results
@@ -64,9 +66,6 @@ def _calculate_distance(lat1: float, lng1: float, lat2: float, lng2: float) -> f
     Returns:
         Distance in kilometers
     """
-    # Earth radius in km
-    R = 6371.0
-
     # Convert to radians
     lat1_rad = math.radians(lat1)
     lat2_rad = math.radians(lat2)
@@ -77,7 +76,7 @@ def _calculate_distance(lat1: float, lng1: float, lat2: float, lng2: float) -> f
     a = math.sin(dlat / 2)**2 + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlng / 2)**2
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
-    return R * c
+    return EARTH_RADIUS_KM * c
 
 
 def _mock_build_time_matrix(addresses: List[str]) -> List[List[int]]:
@@ -265,14 +264,14 @@ def build_time_matrix(addresses: List[str]) -> List[List[int]]:
     # Real API call
     client = get_google_maps_client()
     n = len(addresses)
-    time_matrix = [[9999 for _ in range(n)] for _ in range(n)]
+    time_matrix = [[UNREACHABLE_TIME for _ in range(n)] for _ in range(n)]
 
     # Set diagonal to 0 (time from location to itself)
     for i in range(n):
         time_matrix[i][i] = 0
 
-    # Batch size for API limits (10x10)
-    batch_size = 10
+    # Process in batches matching the Google Distance Matrix API limit
+    batch_size = DISTANCE_MATRIX_BATCH_SIZE
 
     # Process in batches
     for i_start in range(0, n, batch_size):

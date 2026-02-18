@@ -7,6 +7,16 @@ from typing import List, Dict, Tuple
 from ortools.constraint_solver import routing_enums_pb2
 from ortools.constraint_solver import pywrapcp
 
+# Service time calculation coefficients for smart (variable) mode
+SERVICE_TIME_BASE = 1.6           # Minimum overhead in minutes
+SERVICE_TIME_EXPONENT = 1.3       # Power curve exponent (non-linear scaling)
+SERVICE_TIME_COEFFICIENT = 0.045  # Multiplier applied to units^exponent
+SERVICE_TIME_CAP = 7              # Maximum service time in minutes
+
+# Solver parameters
+DEFAULT_SLACK_MINUTES = 30        # Waiting time slack allowed at stops
+SOLVER_TIME_LIMIT_SECONDS = 5     # Maximum solver run time
+
 
 def service_time_for_units(units: int) -> int:
     """
@@ -39,8 +49,8 @@ def service_time_for_units(units: int) -> int:
     Returns:
         Estimated service time in minutes (integer)
     """
-    raw = 1.6 + (units ** 1.3) * 0.045
-    return int(round(min(7, raw)))
+    raw = SERVICE_TIME_BASE + (units ** SERVICE_TIME_EXPONENT) * SERVICE_TIME_COEFFICIENT
+    return int(round(min(SERVICE_TIME_CAP, raw)))
 
 
 def solve_route(
@@ -119,9 +129,9 @@ def solve_route(
     # Add Time dimension
     routing.AddDimension(
         transit_callback_index,
-        30,               # Slack: allow 30 minutes of waiting time
-        max_route_time,   # Maximum route time
-        False,            # Don't force start cumul to zero
+        DEFAULT_SLACK_MINUTES,  # Slack: allow waiting time at stops
+        max_route_time,         # Maximum route time
+        False,                  # Don't force start cumul to zero
         'Time'
     )
     time_dimension = routing.GetDimensionOrDie('Time')
@@ -166,7 +176,7 @@ def solve_route(
     search_parameters.local_search_metaheuristic = (
         routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
     )
-    search_parameters.time_limit.seconds = 5
+    search_parameters.time_limit.seconds = SOLVER_TIME_LIMIT_SECONDS
 
     # Solve
     solution = routing.SolveWithParameters(search_parameters)

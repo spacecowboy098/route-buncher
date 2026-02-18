@@ -4,6 +4,12 @@ Order disposition logic - classify orders into KEEP, EARLY_DELIVERY, RESCHEDULE,
 
 from typing import List, Dict, Tuple
 import math
+from utils import (
+    UNREACHABLE_TIME,
+    EARLY_DELIVERY_THRESHOLD_MINUTES,
+    RESCHEDULE_THRESHOLD_MINUTES,
+    create_classified_order,
+)
 
 
 def calculate_order_score(
@@ -134,19 +140,12 @@ def classify_orders(
         # Calculate score
         score = calculate_order_score("KEEP", avg_distance, order["units"], depot_distance)
 
-        # Start with all original order fields to preserve CSV columns
-        keep_dict = dict(order)  # Copy all fields from original order
-
-        # Add/override with optimizer-specific fields
-        keep_dict.update({
-            "category": "KEEP",
-            "reason": "Included in optimized route",
-            "estimated_arrival": kept_order["arrival_min"],
-            "sequence_index": kept_order["sequence_index"],
-            "node": kept_order["node"],  # Include node for map visualization
-            "optimal_score": score
-        })
-        keep.append(keep_dict)
+        keep.append(create_classified_order(
+            order, "KEEP", "Included in optimized route", score,
+            estimated_arrival=kept_order["arrival_min"],
+            sequence_index=kept_order["sequence_index"],
+            node=kept_order["node"],
+        ))
 
     # Process DROPPED orders
     for node in dropped_nodes:
@@ -157,49 +156,39 @@ def classify_orders(
             distances = [time_matrix[node][k] for k in kept_nodes]
             avg_distance_to_cluster = sum(distances) / len(distances)
         else:
-            # Degenerate case: no orders kept in route
-            # Treat as isolated (large distance)
-            avg_distance_to_cluster = 9999
+            # Degenerate case: no orders kept in route — treat as isolated
+            avg_distance_to_cluster = UNREACHABLE_TIME
 
         # Classify based on thresholds
-        # NOTE: These thresholds (10 and 20 minutes) are initial guesses.
+        # NOTE: These thresholds are initial guesses defined in utils.py.
         #       They should be tuned based on operational data and dispatcher feedback.
 
         # Calculate depot distance for scoring
         depot_distance = time_matrix[0][node]
 
-        # Copy all fields from original order to preserve CSV columns
-        base_dict = dict(order)
-
-        if order["early_delivery_ok"] and avg_distance_to_cluster < 10:
+        if order["early_delivery_ok"] and avg_distance_to_cluster < EARLY_DELIVERY_THRESHOLD_MINUTES:
             # EARLY_DELIVERY: Close to cluster and customer allows early delivery
             score = calculate_order_score("EARLY_DELIVERY", avg_distance_to_cluster, order["units"], depot_distance)
-            early_dict = dict(base_dict)
-            early_dict.update({
-                "category": "EARLY_DELIVERY",
-                "reason": "Close to current cluster (<10 min) and marked early_ok",
-                "optimal_score": score
-            })
-            early.append(early_dict)
-        elif avg_distance_to_cluster < 20:
+            early.append(create_classified_order(
+                order, "EARLY_DELIVERY",
+                f"Close to current cluster (<{EARLY_DELIVERY_THRESHOLD_MINUTES} min) and marked early_ok",
+                score,
+            ))
+        elif avg_distance_to_cluster < RESCHEDULE_THRESHOLD_MINUTES:
             # RESCHEDULE: Moderately close, better fit in different window
             score = calculate_order_score("RESCHEDULE", avg_distance_to_cluster, order["units"], depot_distance)
-            resc_dict = dict(base_dict)
-            resc_dict.update({
-                "category": "RESCHEDULE",
-                "reason": "Moderately close (<20 min); better fit in a different window",
-                "optimal_score": score
-            })
-            reschedule.append(resc_dict)
+            reschedule.append(create_classified_order(
+                order, "RESCHEDULE",
+                f"Moderately close (<{RESCHEDULE_THRESHOLD_MINUTES} min); better fit in a different window",
+                score,
+            ))
         else:
             # CANCEL: Geographically isolated
             score = calculate_order_score("CANCEL", avg_distance_to_cluster, order["units"], depot_distance)
-            cancel_dict = dict(base_dict)
-            cancel_dict.update({
-                "category": "CANCEL",
-                "reason": "Geographically isolated (>=20 min from cluster)",
-                "optimal_score": score
-            })
-            cancel.append(cancel_dict)
+            cancel.append(create_classified_order(
+                order, "CANCEL",
+                f"Geographically isolated (>={RESCHEDULE_THRESHOLD_MINUTES} min from cluster)",
+                score,
+            ))
 
     return keep, early, reschedule, cancel

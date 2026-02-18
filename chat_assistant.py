@@ -7,6 +7,48 @@ import anthropic
 from typing import List, Dict, Optional, Tuple
 import config
 import json
+from config import DEFAULT_CLAUDE_MODEL
+
+# Token limits per operation type
+MAX_TOKENS_CHAT = 1500
+MAX_TOKENS_VALIDATION = 800
+MAX_TOKENS_EXPLANATION = 2000
+
+# Mock explanation text per disposition category (used in test mode)
+MOCK_EXPLANATIONS = {
+    'KEEP': "Order kept in optimized route",
+    'EARLY': "Order eligible for early delivery",
+    'EARLY_DELIVERY': "Order eligible for early delivery",
+    'RESCHEDULE': "Order recommended for rescheduling",
+    'CANCEL': "Order recommended for cancellation",
+}
+
+
+def _sort_kept_orders(keep: List[Dict]) -> List[Dict]:
+    """Return kept orders sorted by sequence index."""
+    return sorted(keep, key=lambda x: x.get('sequence_index', 0))
+
+
+def _calculate_total_route_time(keep: List[Dict], time_matrix: List[List[int]]) -> int:
+    """
+    Calculate total drive time for the route (depot → stops → depot).
+
+    Args:
+        keep: List of kept order dicts (must have 'node' and 'sequence_index' keys)
+        time_matrix: N x N travel time matrix
+
+    Returns:
+        Total drive time in minutes, or 0 if route is empty
+    """
+    if not keep:
+        return 0
+    sorted_keep = _sort_kept_orders(keep)
+    kept_nodes = [k['node'] for k in sorted_keep]
+    total = time_matrix[0][kept_nodes[0]]
+    for i in range(len(kept_nodes) - 1):
+        total += time_matrix[kept_nodes[i]][kept_nodes[i + 1]]
+    total += time_matrix[kept_nodes[-1]][0]
+    return total
 
 
 def generate_mock_validation(keep, early, reschedule, cancel, vehicle_capacity, window_minutes):
@@ -59,20 +101,8 @@ def generate_mock_order_explanations(orders):
     for order in orders:
         order_id = str(order.get('order_id', ''))
         category = order.get('category', 'UNKNOWN').upper()
-
-        if category == 'KEEP':
-            explanation = "Test mode - Order kept in optimized route"
-        elif category == 'EARLY':
-            explanation = "Test mode - Order eligible for early delivery"
-        elif category == 'RESCHEDULE':
-            explanation = "Test mode - Order recommended for rescheduling"
-        elif category == 'CANCEL':
-            explanation = "Test mode - Order recommended for cancellation"
-        else:
-            explanation = "Test mode - Generic reason"
-
-        explanations[order_id] = explanation
-
+        base = MOCK_EXPLANATIONS.get(category, "Generic reason")
+        explanations[order_id] = f"Test mode - {base}"
     return explanations
 
 
@@ -83,17 +113,7 @@ def create_context_for_ai(keep, early, reschedule, cancel, valid_orders, time_ma
     # Calculate current route metrics
     kept_units = sum(o['units'] for o in keep)
     remaining_capacity = vehicle_capacity - kept_units
-
-    # Calculate total route time
-    total_route_time = 0
-    if keep:
-        sorted_keep = sorted(keep, key=lambda x: x.get('sequence_index', 0))
-        kept_nodes = [k['node'] for k in sorted_keep]
-        total_route_time = time_matrix[0][kept_nodes[0]]  # Depot to first
-        for i in range(len(kept_nodes) - 1):
-            total_route_time += time_matrix[kept_nodes[i]][kept_nodes[i + 1]]
-        total_route_time += time_matrix[kept_nodes[-1]][0]  # Last to depot
-
+    total_route_time = _calculate_total_route_time(keep, time_matrix)
     remaining_time = window_minutes - total_route_time
 
     # Create comprehensive context
@@ -113,7 +133,7 @@ KEPT ORDERS ({len(keep)} orders, {kept_units} units):
 """
 
     # Add detailed info for kept orders
-    for order in sorted(keep, key=lambda x: x.get('sequence_index', 0)):
+    for order in _sort_kept_orders(keep):
         context += f"\n- Order #{order['order_id']}: {order['customer_name']}"
         context += f"\n  Address: {order['delivery_address']}"
         context += f"\n  Units: {order['units']}"
@@ -224,8 +244,8 @@ def chat_with_assistant(messages: List[Dict[str, str]], context: str, api_key: s
 
         # Call Claude API (no tool support)
         response = client.messages.create(
-            model="claude-sonnet-4-5-20250929",
-            max_tokens=1500,
+            model=DEFAULT_CLAUDE_MODEL,
+            max_tokens=MAX_TOKENS_CHAT,
             system=system_blocks,
             messages=api_messages
         )
@@ -259,16 +279,7 @@ def validate_optimization_results(keep, early, reschedule, cancel, valid_orders,
 
     # Calculate actual totals for validation
     total_kept_units = sum(o["units"] for o in keep)
-
-    # Calculate drive time and service time
-    drive_time = 0
-    if keep:
-        sorted_keep = sorted(keep, key=lambda x: x.get('sequence_index', 0))
-        kept_nodes = [k['node'] for k in sorted_keep]
-        drive_time = time_matrix[0][kept_nodes[0]]
-        for i in range(len(kept_nodes) - 1):
-            drive_time += time_matrix[kept_nodes[i]][kept_nodes[i + 1]]
-        drive_time += time_matrix[kept_nodes[-1]][0]
+    drive_time = _calculate_total_route_time(keep, time_matrix)
 
     total_service_time = 0
     if service_times:
@@ -340,8 +351,8 @@ Focus on:
         system_message = [{"type": "text", "text": "You are an expert logistics analyst validating delivery route optimizations."}]
 
         response = client.messages.create(
-            model="claude-sonnet-4-5-20250929",
-            max_tokens=800,
+            model=DEFAULT_CLAUDE_MODEL,
+            max_tokens=MAX_TOKENS_VALIDATION,
             system=system_message,
             messages=[{"role": "user", "content": validation_prompt}]
         )
@@ -453,8 +464,8 @@ Format: ORDER_ID|explanation (one per line, no extra text)
 """
 
         response = client.messages.create(
-            model="claude-sonnet-4-5-20250929",
-            max_tokens=2000,
+            model=DEFAULT_CLAUDE_MODEL,
+            max_tokens=MAX_TOKENS_EXPLANATION,
             messages=[{"role": "user", "content": prompt}]
         )
 
@@ -500,8 +511,8 @@ def call_claude_api(prompt: str, api_key: str = None) -> str:
         client = anthropic.Anthropic(api_key=api_key)
 
         response = client.messages.create(
-            model="claude-sonnet-4-5-20250929",
-            max_tokens=2000,
+            model=DEFAULT_CLAUDE_MODEL,
+            max_tokens=MAX_TOKENS_EXPLANATION,
             messages=[
                 {"role": "user", "content": prompt}
             ]

@@ -7,6 +7,9 @@ import os
 from dotenv import load_dotenv
 import googlemaps
 
+# Default Claude model used across the application
+DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-5-20250929"
+
 # Load environment variables from .env file
 load_dotenv()
 
@@ -16,6 +19,22 @@ try:
     HAS_STREAMLIT = True
 except ImportError:
     HAS_STREAMLIT = False
+
+
+def _parse_bool(value: str, default: bool = False) -> bool:
+    """
+    Parse a string environment variable as a boolean.
+
+    Args:
+        value: String to parse
+        default: Default value if value is None or empty
+
+    Returns:
+        True if value is a truthy string ("true", "1", "yes", "on"), False otherwise
+    """
+    if not value:
+        return default
+    return value.lower() in ("true", "1", "yes", "on")
 
 
 def get_secret(key: str, default: str = None) -> str:
@@ -132,7 +151,7 @@ def is_auth_required() -> bool:
         bool: True if authentication required (default), False to skip auth
     """
     require_auth = get_secret("REQUIRE_AUTH", "true")
-    return require_auth.lower() not in ["false", "0", "no", "off"]
+    return _parse_bool(require_auth, default=True)
 
 
 # Runtime test mode override (can be set from UI)
@@ -193,7 +212,7 @@ def is_test_mode() -> bool:
 
     # Fall back to environment variable
     test_mode = get_secret("TEST_MODE", "true")
-    return test_mode.lower() in ["true", "1", "yes", "on"]
+    return _parse_bool(test_mode, default=True)
 
 
 def is_ai_enabled() -> bool:

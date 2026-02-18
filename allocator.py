@@ -8,6 +8,7 @@ delivery windows before per-window route optimization.
 from dataclasses import dataclass
 from datetime import datetime, time
 from typing import List, Dict, Optional
+from utils import parse_reschedule_count
 
 
 @dataclass
@@ -153,10 +154,7 @@ def allocate_orders_across_windows(
     for order in orders:
         orig_window = window_label(order['delivery_window_start'], order['delivery_window_end'])
         units = order['units']
-        reschedule_count = order.get('priorRescheduleCount', 0) or 0
-
-        if isinstance(reschedule_count, str):
-            reschedule_count = int(reschedule_count) if reschedule_count.strip() else 0
+        reschedule_count = parse_reschedule_count(order)
 
         # Size-based pre-filtering
         if units > cancel_threshold:
@@ -336,10 +334,7 @@ def allocate_orders_across_windows(
         orig_window = window_label(order['delivery_window_start'], order['delivery_window_end'])
         orig_start = order['delivery_window_start']
         units = order['units']
-        reschedule_count = order.get('priorRescheduleCount', 0) or 0
-
-        if isinstance(reschedule_count, str):
-            reschedule_count = int(reschedule_count) if reschedule_count.strip() else 0
+        reschedule_count = parse_reschedule_count(order)
 
         rescued = False
         for label, (win_start, win_end) in sorted_window_items:
@@ -392,10 +387,7 @@ def allocate_orders_across_windows(
         orig_window = window_label(order['delivery_window_start'], order['delivery_window_end'])
         orig_start = order['delivery_window_start']
         units = order['units']
-        reschedule_count = order.get('priorRescheduleCount', 0) or 0
-
-        if isinstance(reschedule_count, str):
-            reschedule_count = int(reschedule_count) if reschedule_count.strip() else 0
+        reschedule_count = parse_reschedule_count(order)
 
         rescued = False
         for label, (win_start, win_end) in sorted_window_items:

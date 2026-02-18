@@ -4,8 +4,15 @@ Streamlit app for buncher-optimizer - Buncha Route Optimizer.
 
 import streamlit as st
 import pandas as pd
+import traceback
+import time
+import random
+import uuid
+import folium
+from folium import plugins
+from io import BytesIO
 from typing import List, Dict
-from datetime import datetime
+from datetime import datetime, date, timedelta, time as dt_time
 from streamlit_folium import st_folium
 
 import config
@@ -14,6 +21,12 @@ import geocoder
 import optimizer
 import disposition
 import chat_assistant
+from allocator import window_duration_minutes, window_label, allocate_orders_across_windows
+from chat_assistant import call_claude_api
+from utils import create_numbered_marker_html
+
+# Color scheme for multi-window routes (distinct, high-contrast colors)
+ROUTE_COLORS = ['#FF0000', '#0000FF', '#00C800', '#FF00FF', '#FFA500', '#00FFFF', '#FF1493', '#8B4513']
 
 
 def format_time_minutes(minutes: int) -> str:
@@ -89,9 +102,6 @@ def _initialize_folium_map(center_lat, center_lon, use_google_tiles=True):
     Returns:
         folium.Map object
     """
-    import folium
-    from folium import plugins
-
     if use_google_tiles:
         m = folium.Map(
             location=[center_lat, center_lon],
@@ -130,8 +140,6 @@ def _add_route_polylines(m, addresses, waypoint_order, color='#00C800', weight=4
     Returns:
         None (modifies map in place)
     """
-    import folium
-
     try:
         route_coords = geocoder.get_route_polylines(addresses, waypoint_order)
         if route_coords:
@@ -164,8 +172,6 @@ def _add_route_markers(m, keep, early, reschedule, cancel, geocoded, valid_order
     Returns:
         None (modifies map in place)
     """
-    import folium
-
     # Add fulfillment location marker (blue)
     try:
         folium.Marker(
@@ -213,22 +219,7 @@ def _add_route_markers(m, keep, early, reschedule, cancel, geocoded, valid_order
                 folium.Marker(
                     location=[geo["lat"], geo["lng"]],
                     tooltip=folium.Tooltip(tooltip_html, sticky=True),
-                    icon=folium.DivIcon(html=f'''
-                            <div style="
-                                background-color: #28a745;
-                                border: 2px solid white;
-                                border-radius: 50%;
-                                width: 30px;
-                                height: 30px;
-                                display: flex;
-                                align-items: center;
-                                justify-content: center;
-                                font-size: 14px;
-                                font-weight: bold;
-                                color: white;
-                                box-shadow: 0 2px 5px rgba(0,0,0,0.3);
-                            ">{stop_number}</div>
-                        ''')
+                    icon=folium.DivIcon(html=create_numbered_marker_html(stop_number, '#28a745'))
                 ).add_to(m)
             except Exception as e:
                 print(f"Error adding marker for order {order_id}: {e}")
@@ -378,11 +369,6 @@ def create_multi_window_map(window_results, depot_address, addresses_by_window, 
         folium.Map object with all routes
     """
     try:
-        import folium
-
-        # Color scheme for different windows (distinct colors)
-        route_colors = ['#FF0000', '#0000FF', '#00C800', '#FF00FF', '#FFA500', '#00FFFF', '#FF1493', '#8B4513']
-
         # Collect all coordinates to calculate center
         all_lats = []
         all_lons = []
@@ -439,7 +425,7 @@ def create_multi_window_map(window_results, depot_address, addresses_by_window, 
                 continue
 
             # Get color for this window
-            color = route_colors[window_idx % len(route_colors)]
+            color = ROUTE_COLORS[window_idx % len(ROUTE_COLORS)]
             window_label = window_labels_list[window_idx] if window_idx < len(window_labels_list) else f"Window {window_idx + 1}"
 
             # Build waypoint order
@@ -489,22 +475,7 @@ def create_multi_window_map(window_results, depot_address, addresses_by_window, 
                 folium.Marker(
                     location=[geo["lat"], geo["lng"]],
                     tooltip=folium.Tooltip(tooltip_html, sticky=True),
-                    icon=folium.DivIcon(html=f'''
-                            <div style="
-                                background-color: {color};
-                                border: 2px solid white;
-                                border-radius: 50%;
-                                width: 28px;
-                                height: 28px;
-                                display: flex;
-                                align-items: center;
-                                justify-content: center;
-                                font-size: 12px;
-                                font-weight: bold;
-                                color: white;
-                                box-shadow: 0 2px 5px rgba(0,0,0,0.3);
-                            ">{stop_number}</div>
-                        ''')
+                    icon=folium.DivIcon(html=create_numbered_marker_html(stop_number, color, size=28))
                 ).add_to(m)
 
         # Add legend
@@ -522,7 +493,7 @@ def create_multi_window_map(window_results, depot_address, addresses_by_window, 
             <b>Routes by Window</b><br>
         '''
         for window_idx in sorted(window_results.keys()):
-            color = route_colors[window_idx % len(route_colors)]
+            color = ROUTE_COLORS[window_idx % len(ROUTE_COLORS)]
             window_label = window_labels_list[window_idx] if window_idx < len(window_labels_list) else f"Window {window_idx + 1}"
             keep_count = len(window_results[window_idx].get('keep', []))
             legend_html += f'<span style="color: {color};">●</span> {window_label} ({keep_count} orders)<br>'
@@ -534,7 +505,6 @@ def create_multi_window_map(window_results, depot_address, addresses_by_window, 
 
     except Exception as e:
         print(f"Error creating multi-window map: {e}")
-        import traceback
         traceback.print_exc()
         return None
 
@@ -575,6 +545,61 @@ def generate_route_explanation(keep, early, reschedule, cancel, time_matrix, veh
     return "\n".join(explanation)
 
 
+def _calculate_route_times(kept, time_matrix, service_times):
+    """
+    Calculate total drive time and service time for a route.
+
+    Args:
+        kept: List of kept order dicts (must have 'node' key, sorted by sequence)
+        time_matrix: N x N travel time matrix
+        service_times: List of service times per node
+
+    Returns:
+        dict with keys: drive_time, service_time, total_time
+    """
+    drive_time = 0
+    service_time = 0
+    try:
+        if kept:
+            first_node = int(kept[0]["node"])
+            drive_time += time_matrix[0][first_node]
+            for i in range(len(kept) - 1):
+                from_node = int(kept[i]["node"])
+                to_node = int(kept[i + 1]["node"])
+                drive_time += time_matrix[from_node][to_node]
+            last_node = int(kept[-1]["node"])
+            drive_time += time_matrix[last_node][0]
+        if service_times:
+            for order in kept:
+                node = int(order["node"])
+                if node < len(service_times):
+                    service_time += service_times[node]
+    except (ValueError, TypeError, KeyError, IndexError):
+        pass
+    return {
+        "drive_time": drive_time,
+        "service_time": service_time,
+        "total_time": drive_time + service_time,
+    }
+
+
+def _get_explanation_field(order: dict, show_ai: bool, default_reason: str = "") -> dict:
+    """
+    Return a dict with either an 'AI Explanation' or 'Reason' key, depending on mode.
+
+    Args:
+        order: Order dict (may contain 'ai_explanation' and 'reason' keys)
+        show_ai: If True, return AI Explanation field; otherwise return Reason field
+        default_reason: Fallback text when reason is missing and show_ai is False
+
+    Returns:
+        Dict with a single key ('AI Explanation' or 'Reason')
+    """
+    if show_ai:
+        return {"AI Explanation": order.get("ai_explanation", order.get("reason", ""))}
+    return {"Reason": order.get("reason", default_reason)}
+
+
 def display_optimization_results(keep, early, reschedule, cancel, kept, service_times, geocoded,
                                  depot_address, valid_orders, addresses, time_matrix,
                                  vehicle_capacity, window_minutes, strategy_desc, show_ai_explanations=True):
@@ -593,32 +618,11 @@ def display_optimization_results(keep, early, reschedule, cancel, kept, service_
         st.metric("Capacity Used", f"{total_kept_units}/{vehicle_capacity}", f"{capacity_pct:.1f}%")
     with col3:
         if kept:
-            # Calculate drive time
-            drive_time = 0
             try:
-                if kept:
-                    first_node = int(kept[0]["node"])
-                    drive_time += time_matrix[0][first_node]
-                for i in range(len(kept) - 1):
-                    from_node = int(kept[i]["node"])
-                    to_node = int(kept[i + 1]["node"])
-                    drive_time += time_matrix[from_node][to_node]
-                if kept:
-                    last_node = int(kept[-1]["node"])
-                    drive_time += time_matrix[last_node][0]
-
-                # Calculate service time
-                total_service_time = 0
-                if service_times:
-                    for order in kept:
-                        node = int(order["node"])
-                        if node < len(service_times):
-                            total_service_time += service_times[node]
-
-                total_time = drive_time + total_service_time
-                st.metric("Total Route Time", format_time_minutes(total_time),
-                         f"Drive: {format_time_minutes(drive_time)}, Service: {format_time_minutes(total_service_time)}")
-            except (ValueError, TypeError, KeyError, IndexError) as e:
+                times = _calculate_route_times(kept, time_matrix, service_times)
+                st.metric("Total Route Time", format_time_minutes(times["total_time"]),
+                         f"Drive: {format_time_minutes(times['drive_time'])}, Service: {format_time_minutes(times['service_time'])}")
+            except Exception:
                 st.metric("Total Route Time", "Error calculating")
         else:
             st.metric("Total Route Time", "N/A")
@@ -631,35 +635,14 @@ def display_optimization_results(keep, early, reschedule, cancel, kept, service_
     # Calculate metrics for second row
     if kept:
         try:
-            # Calculate drive time
-            drive_time = 0
-            if kept:
-                first_node = int(kept[0]["node"])
-                drive_time += time_matrix[0][first_node]
-            for i in range(len(kept) - 1):
-                from_node = int(kept[i]["node"])
-                to_node = int(kept[i + 1]["node"])
-                drive_time += time_matrix[from_node][to_node]
-            if kept:
-                last_node = int(kept[-1]["node"])
-                drive_time += time_matrix[last_node][0]
-
-            # Calculate service time
-            total_service_time = 0
-            if service_times:
-                for order in kept:
-                    node = int(order["node"])
-                    if node < len(service_times):
-                        total_service_time += service_times[node]
-
-            total_time = drive_time + total_service_time
+            times = _calculate_route_times(kept, time_matrix, service_times)
+            total_time = times["total_time"]
+            drive_time = times["drive_time"]
             route_miles = total_time * 0.5  # Approximate miles (0.5 miles per minute at 30 mph)
             deliveries_per_hour = (len(keep) / (total_time / 60)) if total_time > 0 else 0
-
-            # Calculate dead leg (return to fulfillment location)
             last_node = int(kept[-1]["node"])
-            dead_leg_time = time_matrix[last_node][0] if kept else 0
-        except (ValueError, TypeError, KeyError, IndexError) as e:
+            dead_leg_time = time_matrix[last_node][0]
+        except (ValueError, TypeError, KeyError, IndexError):
             total_time = 0
             route_miles = 0
             deliveries_per_hour = 0
@@ -742,10 +725,7 @@ def display_optimization_results(keep, early, reschedule, cancel, kept, service_
             row["Est. Service Time"] = f"{service_times[k['node']]} min" if service_times and k['node'] < len(service_times) else "N/A"
             row["Est. Arrival"] = format_time_minutes(k["estimated_arrival"])
 
-            if show_ai_explanations:
-                row["AI Explanation"] = k.get("ai_explanation", k.get("reason", ""))
-            else:
-                row["Reason"] = k.get("reason", "Included in route")
+            row.update(_get_explanation_field(k, show_ai_explanations, "Included in route"))
             keep_data.append(row)
 
         keep_df = pd.DataFrame(keep_data)
@@ -764,10 +744,7 @@ def display_optimization_results(keep, early, reschedule, cancel, kept, service_
                 # Add optimizer-computed fields at the end
                 row["Score"] = f"{e.get('optimal_score', 0)}/100"
 
-                if show_ai_explanations:
-                    row["AI Explanation"] = e.get("ai_explanation", e.get("reason", ""))
-                else:
-                    row["Reason"] = e.get("reason", "Close to route and early OK")
+                row.update(_get_explanation_field(e, show_ai_explanations, "Close to route and early OK"))
                 early_data.append(row)
 
             early_df = pd.DataFrame(early_data)
@@ -784,10 +761,7 @@ def display_optimization_results(keep, early, reschedule, cancel, kept, service_
                 # Add optimizer-computed fields at the end
                 row["Score"] = f"{r.get('optimal_score', 0)}/100"
 
-                if show_ai_explanations:
-                    row["AI Explanation"] = r.get("ai_explanation", r.get("reason", ""))
-                else:
-                    row["Reason"] = r.get("reason", "Better fit in different window")
+                row.update(_get_explanation_field(r, show_ai_explanations, "Better fit in different window"))
                 reschedule_data.append(row)
 
             reschedule_df = pd.DataFrame(reschedule_data)
@@ -804,10 +778,7 @@ def display_optimization_results(keep, early, reschedule, cancel, kept, service_
                 # Add optimizer-computed fields at the end
                 row["Score"] = f"{c.get('optimal_score', 0)}/100"
 
-                if show_ai_explanations:
-                    row["AI Explanation"] = c.get("ai_explanation", c.get("reason", ""))
-                else:
-                    row["Reason"] = c.get("reason", "Too far from cluster")
+                row.update(_get_explanation_field(c, show_ai_explanations, "Too far from cluster"))
                 cancel_data.append(row)
 
             cancel_df = pd.DataFrame(cancel_data)
@@ -858,6 +829,64 @@ def check_password() -> bool:
     st.info("💡 Contact your administrator if you need access.")
 
     return False
+
+
+def _reorder_reason(df):
+    """Move 'Reason' column to appear right after 'numberOfUnits' in a DataFrame."""
+    if 'Reason' in df.columns and 'numberOfUnits' in df.columns:
+        c = list(df.columns)
+        c.remove('Reason')
+        c.insert(c.index('numberOfUnits') + 1, 'Reason')
+        return df[c]
+    return df
+
+
+def calc_route_metrics(kept_orders, kept_nodes_data, service_times, time_matrix, vehicle_capacity):
+    """
+    Calculate key route performance metrics from optimizer output.
+
+    Returns a dict with total_units, load_factor, drive_time, service_time,
+    total_time, route_miles, units_per_mile, stops_per_mile.
+    """
+    total_units = sum(o["units"] for o in kept_orders)
+    load_factor = (total_units / vehicle_capacity * 100) if vehicle_capacity > 0 else 0
+
+    drive_time = 0
+    if kept_nodes_data:
+        try:
+            first_node = int(kept_nodes_data[0]["node"])
+            drive_time += time_matrix[0][first_node]
+            for i in range(len(kept_nodes_data) - 1):
+                from_node = int(kept_nodes_data[i]["node"])
+                to_node = int(kept_nodes_data[i + 1]["node"])
+                drive_time += time_matrix[from_node][to_node]
+            last_node = int(kept_nodes_data[-1]["node"])
+            drive_time += time_matrix[last_node][0]
+        except (ValueError, TypeError, KeyError, IndexError):
+            drive_time = 0
+
+    service_time = 0
+    try:
+        service_time = sum(service_times[int(o["node"])] for o in kept_nodes_data if int(o["node"]) < len(service_times))
+    except (ValueError, TypeError, KeyError, IndexError):
+        service_time = 0
+    total_time = drive_time + service_time
+
+    # Approximate miles (0.5 miles per minute at 30 mph average)
+    route_miles = total_time * 0.5
+    units_per_mile = total_units / route_miles if route_miles > 0 else 0
+    stops_per_mile = len(kept_orders) / route_miles if route_miles > 0 else 0
+
+    return {
+        'total_units': total_units,
+        'load_factor': load_factor,
+        'drive_time': drive_time,
+        'service_time': service_time,
+        'total_time': total_time,
+        'route_miles': route_miles,
+        'units_per_mile': units_per_mile,
+        'stops_per_mile': stops_per_mile,
+    }
 
 
 def main():
@@ -1226,7 +1255,6 @@ def main():
 
             if generate_btn:
                 # Generate random sample based on form inputs
-                import random
 
                 # Parse form values
                 num_orders = int(order_count.split()[0])
@@ -1278,9 +1306,6 @@ def main():
                 zip_bases = [48120, 48124, 48126, 48146, 48180, 48183, 48184, 48186, 48192, 48195]
 
                 # Generate CSV content (new format)
-                import uuid
-                from datetime import date, timedelta
-
                 csv_content = "orderId,runId,externalOrderId,orderStatus,customerID,customerTag,address,deliveryDate,deliveryWindow,earlyEligible,priorRescheduleCount,numberOfUnits,fulfillmentLocation,fulfillmentGeo,fulfillmentLocationAddress,extendedCutOffTime\n"
 
                 # Random base run ID
@@ -1357,7 +1382,6 @@ def main():
 
     # Use random sample if generated
     if st.session_state.get('use_random_sample', False) and uploaded_file is None:
-        from io import BytesIO
         uploaded_file = BytesIO(st.session_state.sample_file_content)
         uploaded_file.name = "random_sample.csv"
 
@@ -1562,13 +1586,11 @@ def main():
             sorted_windows = sorted(list(unique_windows), key=lambda w: w[0])
 
             # Create window labels
-            from allocator import window_label
             window_labels_list = [window_label(start, end) for start, end in sorted_windows]
 
             # Capacity Configuration - Collapsible like Order Preview
             optimization_complete = st.session_state.get('optimization_complete', False)
 
-            from datetime import datetime, time as dt_time
             capacity_data = []
             window_times_map = {}  # Store original window times for matching orders later
 
@@ -1738,7 +1760,6 @@ def main():
                         st.error(f"❌ No orders found for selected window")
                     else:
                         # Compute window duration from selected window times
-                        from allocator import window_duration_minutes
                         window_minutes = window_duration_minutes(selected_window[0], selected_window[1])
 
                         st.info(f"🎯 Optimizing {len(window_orders)} orders for window {window_labels_list[sorted_windows.index(selected_window)]} ({window_minutes} minutes)")
@@ -1779,48 +1800,6 @@ def main():
 
                         # Run THREE optimization cuts with different strategies
                         optimizations = {}
-
-                        # Helper function to calculate route metrics
-                        def calc_route_metrics(kept_orders, kept_nodes_data, service_times, time_matrix, vehicle_capacity):
-                            total_units = sum(o["units"] for o in kept_orders)
-                            load_factor = (total_units / vehicle_capacity * 100) if vehicle_capacity > 0 else 0
-
-                            drive_time = 0
-                            if kept_nodes_data:
-                                try:
-                                    first_node = int(kept_nodes_data[0]["node"])
-                                    drive_time += time_matrix[0][first_node]
-                                    for i in range(len(kept_nodes_data) - 1):
-                                        from_node = int(kept_nodes_data[i]["node"])
-                                        to_node = int(kept_nodes_data[i + 1]["node"])
-                                        drive_time += time_matrix[from_node][to_node]
-                                    last_node = int(kept_nodes_data[-1]["node"])
-                                    drive_time += time_matrix[last_node][0]
-                                except (ValueError, TypeError, KeyError, IndexError):
-                                    drive_time = 0
-
-                            service_time = 0
-                            try:
-                                service_time = sum(service_times[int(o["node"])] for o in kept_nodes_data if int(o["node"]) < len(service_times))
-                            except (ValueError, TypeError, KeyError, IndexError):
-                                service_time = 0
-                            total_time = drive_time + service_time
-
-                            # Approximate miles (0.5 miles per minute at 30 mph average)
-                            route_miles = total_time * 0.5
-                            units_per_mile = total_units / route_miles if route_miles > 0 else 0
-                            stops_per_mile = len(kept_orders) / route_miles if route_miles > 0 else 0
-
-                            return {
-                                'total_units': total_units,
-                                'load_factor': load_factor,
-                                'drive_time': drive_time,
-                                'service_time': service_time,
-                                'total_time': total_time,
-                                'route_miles': route_miles,
-                                'units_per_mile': units_per_mile,
-                                'stops_per_mile': stops_per_mile
-                            }
 
                         # CUT 1: MAX ORDERS ON TIME (RECOMMENDED DEFAULT)
                         update_progress(35, "Running Cut 1: Max Orders (Recommended)...")
@@ -2210,7 +2189,6 @@ def main():
                         update_progress(100, "Complete! 🎉")
 
                         # Clear progress text after a moment
-                        import time
                         time.sleep(1)
                         progress_text.empty()
 
@@ -2340,9 +2318,6 @@ def main():
                     # MULTIPLE WINDOWS MODE: Allocate orders across windows, then optimize each window
                     st.markdown("## 🌅 Multiple Windows Optimization")
 
-                    # Import allocator
-                    from allocator import allocate_orders_across_windows, window_label
-
                     # Use updated window times if available (from editable table)
                     if 'updated_window_times' in st.session_state:
                         # Build windows list from updated times
@@ -2398,7 +2373,6 @@ def main():
                             continue
 
                         # Compute window duration (using edited times if available)
-                        from allocator import window_duration_minutes
                         win_duration = window_duration_minutes(win_start, win_end)
 
                         # Build addresses for this window
@@ -2820,8 +2794,6 @@ PRIORITY CUSTOMER HANDLING:
                                         validation_context += f"  • Order {canc.order['order_id']}: {canc.order['units']} units, reschedule count: {count}\n"
 
                                 # Call AI for validation
-                                from chat_assistant import call_claude_api
-
                                 ai_prompt = f"""You are analyzing a full-day multi-window route optimization result. Review the allocation logic and per-window routes for correctness.
 
 {validation_context}
@@ -2850,7 +2822,6 @@ Be concise but thorough. Focus on actionable insights."""
 
                             except Exception as ai_error:
                                 st.error(f"❌ AI validation error: {ai_error}")
-                                import traceback
                                 st.code(traceback.format_exc())
                     else:
                         st.info("💡 Enable AI (via ANTHROPIC_API_KEY in .env) to get intelligent validation of full day allocation")
@@ -3007,8 +2978,6 @@ Be concise but thorough. Focus on actionable insights."""
                     st.markdown("All routes displayed together with color-coded windows")
 
                     try:
-                        import folium
-
                         if not window_results:
                             st.warning("No routes to display on map")
                         else:
@@ -3038,7 +3007,6 @@ Be concise but thorough. Focus on actionable insights."""
                                     st.warning("⚠️ Could not create map. Check that geocoding completed successfully.")
                             except Exception as inner_map_error:
                                 st.error(f"❌ Error creating map: {str(inner_map_error)}")
-                                import traceback
                                 with st.expander("Map error details"):
                                     st.code(traceback.format_exc())
                     except Exception as map_error:
@@ -3172,14 +3140,6 @@ Numbers in parentheses in each column header are the **day total** across all wi
                             st.warning(f"⚠️ Count mismatch: Movement table shows {global_original_total} orders but CSV contained {len(valid_orders)} orders.")
 
                     # Global Movement Breakdowns
-                    def _reorder_reason(df):
-                        """Move 'Reason' column to appear right after 'numberOfUnits'."""
-                        if 'Reason' in df.columns and 'numberOfUnits' in df.columns:
-                            c = list(df.columns)
-                            c.remove('Reason')
-                            c.insert(c.index('numberOfUnits') + 1, 'Reason')
-                            return df[c]
-                        return df
 
                     # Deliver Early breakdown
                     if allocation_result.moved_early:
@@ -3292,7 +3252,6 @@ Numbers in parentheses in each column header are the **day total** across all wi
                             continue
 
                         # Pre-compute metrics for header and info bar
-                        from allocator import window_duration_minutes
                         win_duration = window_duration_minutes(win_start, win_end)
                         win_capacity = window_capacities.get(win_label, 0)
                         kept_units = result['total_units']
@@ -3476,7 +3435,6 @@ PRIORITY CUSTOMER HANDLING:
                                     count = canc.order.get('priorRescheduleCount', 0) or 0
                                     validation_context += f"  • Order {canc.order['order_id']}: {canc.order['units']} units, reschedule count: {count}\n"
 
-                            from chat_assistant import call_claude_api
                             ai_prompt = f"""You are analyzing a full-day multi-window route optimization result. Review the allocation logic and per-window routes for correctness.
 
 {validation_context}
@@ -3501,7 +3459,6 @@ Be concise but thorough. Focus on actionable insights."""
                             st.session_state.full_day_results['ai_validation'] = validation_result
                         except Exception as ai_error:
                             st.error(f"❌ AI validation error: {ai_error}")
-                            import traceback
                             st.code(traceback.format_exc())
 
                         # Replace the loading indicator at position 2 with the actual result
@@ -3514,12 +3471,10 @@ Be concise but thorough. Focus on actionable insights."""
 
                 except Exception as cache_error:
                     st.error(f"❌ Error displaying cached Multiple Windows results: {cache_error}")
-                    import traceback
                     st.code(traceback.format_exc())
 
         except Exception as e:
             st.error(f"❌ Error processing file: {e}")
-            import traceback
             with st.expander("Error details"):
                 st.code(traceback.format_exc())
 

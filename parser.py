@@ -5,6 +5,14 @@ CSV parsing and validation for order data.
 from typing import List, Dict, Tuple
 from datetime import datetime
 import pandas as pd
+from utils import parse_boolean
+
+# Additional fields copied from the new CSV format when present
+OPTIONAL_ORDER_FIELDS = [
+    "orderId", "runId", "orderStatus", "customerTag", "customerID",
+    "deliveryDate", "priorRescheduleCount", "fulfillmentLocation",
+    "fulfillmentGeo", "fulfillmentLocationAddress", "extendedCutOffTime",
+]
 
 
 def parse_csv(file) -> Tuple[List[Dict], int]:
@@ -83,11 +91,7 @@ def parse_csv(file) -> Tuple[List[Dict], int]:
     for _, row in df.iterrows():
         # Parse early_ok as boolean
         early_col = required_columns["early_ok"]
-        if pd.isna(row[early_col]) or str(row[early_col]).strip() == "":
-            early_delivery_ok = False
-        else:
-            early_ok_str = str(row[early_col]).strip().lower()
-            early_delivery_ok = early_ok_str in ["yes", "y", "true", "1", "true"]
+        early_delivery_ok = parse_boolean(row[early_col])
 
         # Parse time windows
         order_id_col = required_columns["order_id"]
@@ -140,13 +144,7 @@ def parse_csv(file) -> Tuple[List[Dict], int]:
 
         # Add all additional fields from the CSV for future use
         if is_new_format:
-            # Store all extra fields from new format
-            optional_fields = [
-                "orderId", "runId", "orderStatus", "customerTag", "customerID",
-                "deliveryDate", "priorRescheduleCount", "fulfillmentLocation",
-                "fulfillmentGeo", "fulfillmentLocationAddress", "extendedCutOffTime"
-            ]
-            for field in optional_fields:
+            for field in OPTIONAL_ORDER_FIELDS:
                 if field in df.columns:
                     order[field] = row[field] if not pd.isna(row[field]) else None
 
