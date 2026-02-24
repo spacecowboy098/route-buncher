@@ -22,6 +22,18 @@ REFACTOR CODE WHEREVER OPPORTUNITY EXSISTS
         203 -✅ Changes you make with tools are IMMEDIATELY applied to the Dispatcher Sandbox                                                     
         204 -✅ Users can see updated map and metrics after you make changes       
 
+
+
+
+# Completed 2/24
+The current tool is super helpful for a dispatcher manager to see what a dispatcher could have done, but it's overwhelming for a dispatcher who may be handling multiple orders across multiple windows. We need to create a simplified view that has fixed variables and just shows the suggestions of what needs to be done. i.e. an order needs to be delivered early, rescheduled later today, rescheduled to a new day or cancelled (keep these consistent with the current states).
+
+The current view should be seperated completely for dispatchers and this new view should be defaulted as dispatchers will be the primary users. the dispatcher should be able to upload a csv and then get an output that simply shows current run, order id, new run and the action that needs to be taken and the justification, there should also be a green check or red check based on of the dispatcher took the action to help them follow which reccomended actions were completed vs not.
+
+use askuserquestion tool and make a plan
+
+It's possible a store may have more than one vehicle, a dispatcher may need help within one window how to best move orders into two seperate routes, can you help me think through the logic here to enable a two van mode? 
+
 # Completed 2/18
 
 (DONE) 4) We should clean up the debug messages across the entire UX, remove unecessary messages and improve the input heierachy, help me think through what could be improved here

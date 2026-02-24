@@ -210,3 +210,130 @@ def solve_route(
             dropped_nodes.append(node)
 
     return kept_orders, dropped_nodes
+
+
+def solve_route_two_van(
+    time_matrix: List[List[int]],
+    demands: List[int],
+    vehicle_capacity: int,
+    max_route_time: int,
+    service_times: List[int],
+    drop_penalty: int = 100000
+) -> Tuple[List[Dict], List[Dict], List[int]]:
+    """
+    Solve two-vehicle closed-route CVRPTW (both start and end at depot).
+    Same capacity and time window for both vehicles.
+
+    Args:
+        time_matrix: N x N matrix of travel times in minutes (index 0 is depot)
+        demands: List of demands (units) for each node (index 0 is depot with 0 demand)
+        vehicle_capacity: Maximum capacity of each vehicle in units (both vans identical)
+        max_route_time: Maximum route duration in minutes for each vehicle
+        service_times: List of service times in minutes for each node (index 0 is depot)
+        drop_penalty: Penalty for dropping an order (default 100,000)
+
+    Returns:
+        Tuple of (van1_kept_orders, van2_kept_orders, dropped_nodes) where:
+        - van1_kept_orders: List of dicts for vehicle 0 (node, sequence_index, arrival_min)
+        - van2_kept_orders: List of dicts for vehicle 1 (node, sequence_index, arrival_min)
+        - dropped_nodes: List of node indexes not served by either vehicle
+    """
+    data = {
+        "time_matrix": time_matrix,
+        "demands": demands,
+        "vehicle_capacity": vehicle_capacity,
+        "max_route_time": max_route_time,
+        "service_times": service_times
+    }
+
+    # 2 vehicles, shared depot at node 0
+    manager = pywrapcp.RoutingIndexManager(
+        len(time_matrix),
+        2,
+        0
+    )
+
+    routing = pywrapcp.RoutingModel(manager)
+
+    def time_callback(from_index, to_index):
+        from_node = manager.IndexToNode(from_index)
+        to_node = manager.IndexToNode(to_index)
+        drive_time = data["time_matrix"][from_node][to_node]
+        service_time = data["service_times"][from_node]
+        return drive_time + service_time
+
+    transit_callback_index = routing.RegisterTransitCallback(time_callback)
+    routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
+
+    routing.AddDimension(
+        transit_callback_index,
+        30,
+        max_route_time,
+        False,
+        'Time'
+    )
+    time_dimension = routing.GetDimensionOrDie('Time')
+
+    def demand_callback(from_index):
+        from_node = manager.IndexToNode(from_index)
+        return data["demands"][from_node]
+
+    demand_callback_index = routing.RegisterUnaryTransitCallback(demand_callback)
+
+    routing.AddDimensionWithVehicleCapacity(
+        demand_callback_index,
+        0,
+        [vehicle_capacity, vehicle_capacity],  # Both vans same capacity
+        True,
+        'Capacity'
+    )
+
+    # Allow dropping nodes with penalty
+    penalty = drop_penalty
+    for node in range(1, len(time_matrix)):
+        routing.AddDisjunction([manager.NodeToIndex(node)], penalty)
+
+    search_parameters = pywrapcp.DefaultRoutingSearchParameters()
+    search_parameters.first_solution_strategy = (
+        routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+    )
+    search_parameters.local_search_metaheuristic = (
+        routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
+    )
+    search_parameters.time_limit.seconds = 5
+
+    solution = routing.SolveWithParameters(search_parameters)
+
+    if not solution:
+        return [], [], list(range(1, len(time_matrix)))
+
+    van1_kept = []
+    van2_kept = []
+
+    for vehicle_id in range(2):
+        kept_orders = []
+        index = routing.Start(vehicle_id)
+        sequence_index = 0
+
+        while not routing.IsEnd(index):
+            node = manager.IndexToNode(index)
+            if node != 0:  # Skip depot
+                time_var = time_dimension.CumulVar(index)
+                arrival_min = solution.Value(time_var)
+                kept_orders.append({
+                    "node": node,
+                    "sequence_index": sequence_index,
+                    "arrival_min": arrival_min
+                })
+                sequence_index += 1
+            index = solution.Value(routing.NextVar(index))
+
+        if vehicle_id == 0:
+            van1_kept = kept_orders
+        else:
+            van2_kept = kept_orders
+
+    visited_nodes = set(o["node"] for o in van1_kept + van2_kept)
+    dropped_nodes = [node for node in range(1, len(time_matrix)) if node not in visited_nodes]
+
+    return van1_kept, van2_kept, dropped_nodes

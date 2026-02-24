@@ -362,6 +362,139 @@ def create_map_visualization(keep, cancel, early, reschedule, geocoded, depot_ad
         return None
 
 
+def create_two_van_map(van1_keep, van2_keep, early, reschedule, cancel,
+                       geocoded, depot_address, valid_orders, addresses, service_times):
+    """Create map showing two van routes: Van 1 in Gumball blue, Van 2 in Tang orange."""
+    try:
+        import folium
+
+        depot_geo = geocoded[0]
+        if depot_geo["lat"] is None:
+            return None
+
+        all_lats = [depot_geo["lat"]]
+        all_lons = [depot_geo["lng"]]
+        for order in van1_keep + van2_keep:
+            if "node" in order and order["node"] is not None:
+                try:
+                    node_idx = int(order["node"])
+                    if 0 <= node_idx < len(geocoded):
+                        geo = geocoded[node_idx]
+                        if geo["lat"] is not None:
+                            all_lats.append(geo["lat"])
+                            all_lons.append(geo["lng"])
+                except (ValueError, TypeError, IndexError):
+                    continue
+
+        center_lat = sum(all_lats) / len(all_lats) if all_lats else depot_geo["lat"]
+        center_lon = sum(all_lons) / len(all_lons) if all_lons else depot_geo["lng"]
+
+        m = _initialize_folium_map(center_lat, center_lon, use_google_tiles=True)
+
+        # Van 1 route: Gumball blue
+        if van1_keep:
+            sorted_van1 = sorted(van1_keep, key=lambda x: x.get("sequence_index", 0))
+            waypoints = [0] + [int(o["node"]) for o in sorted_van1 if o.get("node") is not None] + [0]
+            _add_route_polylines(m, addresses, waypoints, color='#5DA9E9', weight=4, opacity=0.8)
+
+        # Van 2 route: Tang orange
+        if van2_keep:
+            sorted_van2 = sorted(van2_keep, key=lambda x: x.get("sequence_index", 0))
+            waypoints = [0] + [int(o["node"]) for o in sorted_van2 if o.get("node") is not None] + [0]
+            _add_route_polylines(m, addresses, waypoints, color='#F5A874', weight=4, opacity=0.8)
+
+        # Depot marker
+        folium.Marker(
+            location=[depot_geo["lat"], depot_geo["lng"]],
+            popup=folium.Popup(f"<b>Fulfillment Location</b><br/>Starting Point", max_width=200),
+            tooltip="🏠 Fulfillment Location",
+            icon=folium.Icon(color='blue', icon='home', prefix='fa')
+        ).add_to(m)
+
+        # Van stop markers
+        van_colors = [('#5DA9E9', 'Van 1'), ('#F5A874', 'Van 2')]
+        for van_keep, (van_color, van_label) in zip([van1_keep, van2_keep], van_colors):
+            for order in sorted(van_keep, key=lambda x: x.get("sequence_index", 0)):
+                if "node" not in order or order["node"] is None:
+                    continue
+                try:
+                    node = int(order["node"])
+                    if node < 0 or node >= len(geocoded):
+                        continue
+                    geo = geocoded[node]
+                    if geo["lat"] is None:
+                        continue
+                    order_id = str(order.get('order_id', ''))
+                    customer_name = str(order.get('customer_name', ''))
+                    units = int(order.get('units', 0))
+                    sequence_index = int(order.get('sequence_index', 0))
+                    service_time = int(service_times[node]) if service_times and node < len(service_times) else 0
+                    stop_number = sequence_index + 1
+                except (ValueError, TypeError, IndexError, KeyError):
+                    continue
+
+                tooltip_html = f"""
+                    <div style="font-family: Arial; font-size: 12px;">
+                        <b>✅ Order #{order_id} ({van_label})</b><br/>
+                        <b>customerID:</b> {customer_name}<br/>
+                        <b>numberOfUnits:</b> {units}<br/>
+                        <b>Est. Service Time:</b> {service_time} min<br/>
+                        <b>Sequence:</b> Stop #{stop_number}
+                    </div>
+                """
+                try:
+                    folium.Marker(
+                        location=[geo["lat"], geo["lng"]],
+                        tooltip=folium.Tooltip(tooltip_html, sticky=True),
+                        icon=folium.DivIcon(html=f'''
+                            <div style="
+                                background-color: {van_color};
+                                border: 2px solid white;
+                                border-radius: 50%;
+                                width: 30px;
+                                height: 30px;
+                                display: flex;
+                                align-items: center;
+                                justify-content: center;
+                                font-size: 14px;
+                                font-weight: bold;
+                                color: white;
+                                box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+                            ">{stop_number}</div>
+                        ''')
+                    ).add_to(m)
+                except Exception as e:
+                    print(f"Error adding van marker: {e}")
+                    continue
+
+        # Early/reschedule/cancel markers (no keep list, just others)
+        _add_route_markers(m, [], early, reschedule, cancel, geocoded, valid_orders, service_times, depot_geo)
+
+        # Legend
+        legend_html = '''
+        <div style="position: fixed;
+                    bottom: 50px; right: 50px;
+                    background-color: white;
+                    padding: 10px;
+                    border: 2px solid grey;
+                    border-radius: 5px;
+                    box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+                    z-index: 9999;
+                    font-family: Arial;
+                    font-size: 12px;">
+            <b>Two-Van Routes</b><br>
+            <span style="color: #5DA9E9;">●</span> Van 1 (blue)<br>
+            <span style="color: #F5A874;">●</span> Van 2 (orange)
+        </div>'''
+        m.get_root().html.add_child(folium.Element(legend_html))
+
+        return m
+
+    except Exception as e:
+        print(f"Error creating two-van map: {e}")
+        return None
+
+
 def create_multi_window_map(window_results, depot_address, addresses_by_window, geocoded_by_window, window_labels_list):
     """
     Create an interactive map showing all delivery windows with color-coded routes.
@@ -814,6 +947,171 @@ def display_optimization_results(keep, early, reschedule, cancel, kept, service_
             st.dataframe(cancel_df, use_container_width=True)
 
 
+def display_two_van_results(van1_keep, van2_keep, van1_kept, van2_kept,
+                             early, reschedule, cancel,
+                             service_times, geocoded, depot_address,
+                             valid_orders, addresses, time_matrix,
+                             vehicle_capacity, window_minutes,
+                             van1_metrics, van2_metrics,
+                             show_ai_explanations=True):
+    """Display results for Two-Van Mode optimization."""
+
+    # Combined summary KPIs
+    st.subheader("📊 Two-Van Route KPIs")
+    total_keep = len(van1_keep) + len(van2_keep)
+    total_units = van1_metrics['total_units'] + van2_metrics['total_units']
+    combined_capacity_pct = (total_units / (vehicle_capacity * 2) * 100) if vehicle_capacity > 0 else 0
+
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Total KEEP Orders", total_keep)
+    with col2:
+        st.metric("Total Units", f"{total_units}/{vehicle_capacity * 2}", f"{combined_capacity_pct:.1f}%")
+    with col3:
+        van1_ok = van1_metrics['total_time'] <= window_minutes
+        van2_ok = van2_metrics['total_time'] <= window_minutes
+        both_ok = van1_ok and van2_ok
+        st.metric("Window Status", "✅ Both in window" if both_ok else "⚠️ Check vans")
+    with col4:
+        st.metric("Total Orders", total_keep + len(early) + len(reschedule) + len(cancel))
+
+    st.markdown("---")
+
+    # Movement Summary
+    st.subheader("📊 Movement Summary")
+    original_total = len(valid_orders)
+    movement_data = [{
+        "Original Total": original_total,
+        "🚛 On Route": total_keep,
+        "⏰ Deliver Early": len(early),
+        "📅 Reschedule": len(reschedule),
+        "❌ Cancel": len(cancel)
+    }]
+    movement_df = pd.DataFrame(movement_data)
+    st.dataframe(movement_df, use_container_width=True)
+    st.caption(f"All {original_total} orders classified after optimization.")
+
+    st.markdown("---")
+
+    # Map Visualization
+    st.subheader("🗺️ Geographic Overview")
+    try:
+        map_chart = create_two_van_map(
+            van1_keep, van2_keep, early, reschedule, cancel,
+            geocoded, depot_address, valid_orders, addresses, service_times
+        )
+        if map_chart:
+            st_folium(map_chart, width=1200, height=600)
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.markdown("🔵 **Blue circles**: Van 1 stops")
+            with col2:
+                st.markdown("🟠 **Orange circles**: Van 2 stops")
+            with col3:
+                st.markdown("🕒 **Orange clock**: Early/Reschedule")
+            with col4:
+                st.markdown("🏠 **Blue home**: Fulfillment Location")
+        else:
+            st.warning("❌ Error creating map.")
+    except Exception as e:
+        st.warning(f"❌ Error creating map: {str(e)}")
+
+    st.markdown("---")
+
+    # Per-van tabs
+    st.subheader("🚐 Route Details by Van")
+    van_tab1, van_tab2 = st.tabs(["🚐 Van 1", "🚐 Van 2"])
+
+    for tab, van_keep, van_kept, van_metrics, van_label in [
+        (van_tab1, van1_keep, van1_kept, van1_metrics, "Van 1"),
+        (van_tab2, van2_keep, van2_kept, van2_metrics, "Van 2"),
+    ]:
+        with tab:
+            cap_pct = (van_metrics['total_units'] / vehicle_capacity * 100) if vehicle_capacity > 0 else 0
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Orders", len(van_keep))
+            with col2:
+                st.metric("Capacity", f"{van_metrics['total_units']}/{vehicle_capacity}", f"{cap_pct:.1f}%")
+            with col3:
+                total_t = van_metrics['total_time']
+                drive_t = van_metrics['drive_time']
+                st.metric("Route Time", format_time_minutes(total_t),
+                          f"Drive: {format_time_minutes(drive_t)}")
+            with col4:
+                dead_leg = 0
+                if van_kept:
+                    try:
+                        last_node = int(van_kept[-1]["node"])
+                        dead_leg = time_matrix[last_node][0]
+                    except (ValueError, TypeError, KeyError, IndexError):
+                        dead_leg = 0
+                st.metric("Dead Leg", f"{dead_leg} min",
+                          help="Time from last delivery back to fulfillment location")
+
+            if van_keep:
+                keep_data = []
+                for k in sorted(van_keep, key=lambda x: x["sequence_index"]):
+                    row = {"Seq": k["sequence_index"] + 1}
+                    row.update(create_standard_row(k))
+                    row["Score"] = f"{k.get('optimal_score', 0)}/100"
+                    row["Est. Service Time"] = (
+                        f"{service_times[k['node']]} min"
+                        if service_times and k['node'] < len(service_times) else "N/A"
+                    )
+                    row["Est. Arrival"] = format_time_minutes(k["estimated_arrival"])
+                    if show_ai_explanations:
+                        row["AI Explanation"] = k.get("ai_explanation", k.get("reason", ""))
+                    else:
+                        row["Reason"] = k.get("reason", "Included in route")
+                    keep_data.append(row)
+                st.dataframe(pd.DataFrame(keep_data), width="stretch")
+            else:
+                st.info(f"No orders assigned to {van_label}")
+
+    st.markdown("---")
+
+    # Disposition expanders (combined/shared)
+    if early:
+        with st.expander(f"⏰ Deliver Early ({len(early)} orders)", expanded=False):
+            early_data = []
+            for e in early:
+                row = create_standard_row(e)
+                row["Score"] = f"{e.get('optimal_score', 0)}/100"
+                if show_ai_explanations:
+                    row["AI Explanation"] = e.get("ai_explanation", e.get("reason", ""))
+                else:
+                    row["Reason"] = e.get("reason", "Close to route and early OK")
+                early_data.append(row)
+            st.dataframe(pd.DataFrame(early_data), use_container_width=True)
+
+    if reschedule:
+        with st.expander(f"📅 Reschedule ({len(reschedule)} orders)", expanded=False):
+            reschedule_data = []
+            for r in reschedule:
+                row = create_standard_row(r)
+                row["Score"] = f"{r.get('optimal_score', 0)}/100"
+                if show_ai_explanations:
+                    row["AI Explanation"] = r.get("ai_explanation", r.get("reason", ""))
+                else:
+                    row["Reason"] = r.get("reason", "Better fit in different window")
+                reschedule_data.append(row)
+            st.dataframe(pd.DataFrame(reschedule_data), use_container_width=True)
+
+    if cancel:
+        with st.expander(f"❌ Cancel ({len(cancel)} orders)", expanded=False):
+            cancel_data = []
+            for c in cancel:
+                row = create_standard_row(c)
+                row["Score"] = f"{c.get('optimal_score', 0)}/100"
+                if show_ai_explanations:
+                    row["AI Explanation"] = c.get("ai_explanation", c.get("reason", ""))
+                else:
+                    row["Reason"] = c.get("reason", "Too far from cluster")
+                cancel_data.append(row)
+            st.dataframe(pd.DataFrame(cancel_data), use_container_width=True)
+
+
 def check_password() -> bool:
     """
     Password protection for the app.
@@ -1014,6 +1312,14 @@ def main():
             key="vehicle_capacity_input"
         )
 
+        # Two-Van Mode toggle
+        two_van_mode = st.sidebar.checkbox(
+            "🚐 Two-Van Mode",
+            value=False,
+            help="Split route across 2 identical vehicles. Maximizes total orders served.",
+            key="two_van_mode_toggle"
+        )
+
         # Cut selection
         st.sidebar.markdown("**Optimization Scenarios:**")
         st.sidebar.checkbox(
@@ -1023,18 +1329,23 @@ def main():
             key="enable_cut1",
             help="Always enabled - maximizes number of orders served"
         )
-        enable_cut2 = st.sidebar.checkbox(
-            "Cut 2: Shortest Route",
-            value=False,
-            key="enable_cut2",
-            help="Optional - optimizes for shortest total distance"
-        )
-        enable_cut3 = st.sidebar.checkbox(
-            "Cut 3: High Density",
-            value=False,
-            key="enable_cut3",
-            help="Optional - maximizes deliveries per hour in dense clusters"
-        )
+        if two_van_mode:
+            enable_cut2 = False
+            enable_cut3 = False
+            st.sidebar.caption("_Two-Van Mode runs Cut 1 only._")
+        else:
+            enable_cut2 = st.sidebar.checkbox(
+                "Cut 2: Shortest Route",
+                value=False,
+                key="enable_cut2",
+                help="Optional - optimizes for shortest total distance"
+            )
+            enable_cut3 = st.sidebar.checkbox(
+                "Cut 3: High Density",
+                value=False,
+                key="enable_cut3",
+                help="Optional - maximizes deliveries per hour in dense clusters"
+            )
 
     elif mode == "Multiple Windows" and orders:
         st.sidebar.markdown("#### Multi-Window Settings")
@@ -1824,37 +2135,87 @@ def main():
 
                         # CUT 1: MAX ORDERS ON TIME (RECOMMENDED DEFAULT)
                         update_progress(35, "Running Cut 1: Max Orders (Recommended)...")
-                        kept_max, dropped_max = optimizer.solve_route(
-                            time_matrix=time_matrix,
-                            demands=demands,
-                            vehicle_capacity=vehicle_capacity,
-                            max_route_time=window_minutes,
-                            service_times=service_times,
-                            drop_penalty=10000  # Very high - maximize orders served
-                        )
-                        keep_max, early_max, reschedule_max, cancel_max = disposition.classify_orders(
-                            all_orders=orders_to_optimize,
-                            kept=kept_max,
-                            dropped_nodes=dropped_max,
-                            time_matrix=time_matrix
-                        )
-                        metrics_max = calc_route_metrics(keep_max, kept_max, service_times, time_matrix, vehicle_capacity)
+                        if st.session_state.get('two_van_mode_toggle', False):
+                            # TWO-VAN MODE: solve with 2 vehicles
+                            van1_kept_raw, van2_kept_raw, dropped_max = optimizer.solve_route_two_van(
+                                time_matrix=time_matrix,
+                                demands=demands,
+                                vehicle_capacity=vehicle_capacity,
+                                max_route_time=window_minutes,
+                                service_times=service_times,
+                                drop_penalty=10000
+                            )
+                            combined_kept = van1_kept_raw + van2_kept_raw
+                            keep_max, early_max, reschedule_max, cancel_max = disposition.classify_orders(
+                                all_orders=orders_to_optimize,
+                                kept=combined_kept,
+                                dropped_nodes=dropped_max,
+                                time_matrix=time_matrix
+                            )
+                            van1_nodes = {o["node"] for o in van1_kept_raw}
+                            van2_nodes = {o["node"] for o in van2_kept_raw}
+                            van1_keep = [o for o in keep_max if o["node"] in van1_nodes]
+                            van2_keep = [o for o in keep_max if o["node"] in van2_nodes]
+                            metrics_max = calc_route_metrics(keep_max, combined_kept, service_times, time_matrix, vehicle_capacity)
+                            van1_metrics = calc_route_metrics(van1_keep, van1_kept_raw, service_times, time_matrix, vehicle_capacity)
+                            van2_metrics = calc_route_metrics(van2_keep, van2_kept_raw, service_times, time_matrix, vehicle_capacity)
+                            kept_max = combined_kept
 
-                        optimizations['max_orders'] = {
-                            'keep': keep_max,
-                            'early': early_max,
-                            'reschedule': reschedule_max,
-                            'cancel': cancel_max,
-                            'kept': kept_max,
-                            'cut_type': 'max_orders_recommended',
-                            'strategy': 'Maximize orders served within constraints (RECOMMENDED)',
-                            'penalty': 10000,
-                            'orders_kept': len(keep_max),
-                            **metrics_max
-                        }
+                            optimizations['max_orders'] = {
+                                'keep': keep_max,
+                                'early': early_max,
+                                'reschedule': reschedule_max,
+                                'cancel': cancel_max,
+                                'kept': combined_kept,
+                                'cut_type': 'max_orders_recommended',
+                                'strategy': 'Maximize orders served across 2 vans (Two-Van Mode)',
+                                'penalty': 10000,
+                                'orders_kept': len(keep_max),
+                                'two_van_mode': True,
+                                'van1_kept': van1_kept_raw,
+                                'van2_kept': van2_kept_raw,
+                                'van1_keep': van1_keep,
+                                'van2_keep': van2_keep,
+                                'van1_metrics': van1_metrics,
+                                'van2_metrics': van2_metrics,
+                                **metrics_max
+                            }
 
-                        st.write(f"🔍 Cut 1 (Max Orders, penalty=10000): {len(keep_max)} orders, {metrics_max['total_units']} units ({metrics_max['load_factor']:.0f}%), {metrics_max['total_time']} min")
-                        st.write(f"   Density: {metrics_max['stops_per_mile']:.1f} stops/mile, {metrics_max['units_per_mile']:.1f} units/mile")
+                            st.write(f"🔍 Cut 1 Two-Van Mode: Van 1={len(van1_keep)} orders, Van 2={len(van2_keep)} orders, Total={len(keep_max)}, {metrics_max['total_units']} units")
+                            st.write(f"   Van 1: {van1_metrics['total_time']} min | Van 2: {van2_metrics['total_time']} min")
+                        else:
+                            # SINGLE-VAN MODE (default)
+                            kept_max, dropped_max = optimizer.solve_route(
+                                time_matrix=time_matrix,
+                                demands=demands,
+                                vehicle_capacity=vehicle_capacity,
+                                max_route_time=window_minutes,
+                                service_times=service_times,
+                                drop_penalty=10000  # Very high - maximize orders served
+                            )
+                            keep_max, early_max, reschedule_max, cancel_max = disposition.classify_orders(
+                                all_orders=orders_to_optimize,
+                                kept=kept_max,
+                                dropped_nodes=dropped_max,
+                                time_matrix=time_matrix
+                            )
+                            metrics_max = calc_route_metrics(keep_max, kept_max, service_times, time_matrix, vehicle_capacity)
+
+                            optimizations['max_orders'] = {
+                                'keep': keep_max,
+                                'early': early_max,
+                                'reschedule': reschedule_max,
+                                'cancel': cancel_max,
+                                'kept': kept_max,
+                                'cut_type': 'max_orders_recommended',
+                                'strategy': 'Maximize orders served within constraints (RECOMMENDED)',
+                                'penalty': 10000,
+                                'orders_kept': len(keep_max),
+                                **metrics_max
+                            }
+
+                            st.write(f"🔍 Cut 1 (Max Orders, penalty=10000): {len(keep_max)} orders, {metrics_max['total_units']} units ({metrics_max['load_factor']:.0f}%), {metrics_max['total_time']} min")
+                            st.write(f"   Density: {metrics_max['stops_per_mile']:.1f} stops/mile, {metrics_max['units_per_mile']:.1f} units/mile")
 
                         # CUT 2: SHORTEST ROUTE (OPTIONAL)
                         # Only run if dispatcher enabled Cut 2
@@ -2270,23 +2631,45 @@ def main():
                         if st.session_state.active_tab == 0:
                             opt = optimizations['max_orders']
 
-                            display_optimization_results(
-                                keep=opt['keep'],
-                                early=opt['early'],
-                                reschedule=opt['reschedule'],
-                                cancel=opt['cancel'],
-                                kept=opt['kept'],
-                                service_times=service_times,
-                                geocoded=geocoded,
-                                depot_address=depot_address,
-                                valid_orders=valid_orders,
-                                addresses=addresses,
-                                time_matrix=time_matrix,
-                                vehicle_capacity=vehicle_capacity,
-                                window_minutes=window_minutes,
-                                strategy_desc=opt['strategy'],
-                                show_ai_explanations=True
-                            )
+                            if opt.get('two_van_mode'):
+                                display_two_van_results(
+                                    van1_keep=opt['van1_keep'],
+                                    van2_keep=opt['van2_keep'],
+                                    van1_kept=opt['van1_kept'],
+                                    van2_kept=opt['van2_kept'],
+                                    early=opt['early'],
+                                    reschedule=opt['reschedule'],
+                                    cancel=opt['cancel'],
+                                    service_times=service_times,
+                                    geocoded=geocoded,
+                                    depot_address=depot_address,
+                                    valid_orders=valid_orders,
+                                    addresses=addresses,
+                                    time_matrix=time_matrix,
+                                    vehicle_capacity=vehicle_capacity,
+                                    window_minutes=window_minutes,
+                                    van1_metrics=opt['van1_metrics'],
+                                    van2_metrics=opt['van2_metrics'],
+                                    show_ai_explanations=True
+                                )
+                            else:
+                                display_optimization_results(
+                                    keep=opt['keep'],
+                                    early=opt['early'],
+                                    reschedule=opt['reschedule'],
+                                    cancel=opt['cancel'],
+                                    kept=opt['kept'],
+                                    service_times=service_times,
+                                    geocoded=geocoded,
+                                    depot_address=depot_address,
+                                    valid_orders=valid_orders,
+                                    addresses=addresses,
+                                    time_matrix=time_matrix,
+                                    vehicle_capacity=vehicle_capacity,
+                                    window_minutes=window_minutes,
+                                    strategy_desc=opt['strategy'],
+                                    show_ai_explanations=True
+                                )
 
                         # TAB 2: SHORTEST ROUTE (only if Cut 2 was run)
                         elif st.session_state.active_tab == 1 and 'shortest' in optimizations:
@@ -2917,23 +3300,45 @@ Be concise but thorough. Focus on actionable insights."""
                 if st.session_state.active_tab == 0:
                     opt = optimizations['max_orders']
 
-                    display_optimization_results(
-                        keep=opt['keep'],
-                        early=opt['early'],
-                        reschedule=opt['reschedule'],
-                        cancel=opt['cancel'],
-                        kept=opt['kept'],
-                        service_times=service_times,
-                        geocoded=geocoded,
-                        depot_address=depot_address,
-                        valid_orders=valid_orders_display,
-                        addresses=addresses,
-                        time_matrix=time_matrix,
-                        vehicle_capacity=vehicle_capacity,
-                        window_minutes=window_minutes,
-                        strategy_desc=opt['strategy'],
-                        show_ai_explanations=True
-                    )
+                    if opt.get('two_van_mode'):
+                        display_two_van_results(
+                            van1_keep=opt['van1_keep'],
+                            van2_keep=opt['van2_keep'],
+                            van1_kept=opt['van1_kept'],
+                            van2_kept=opt['van2_kept'],
+                            early=opt['early'],
+                            reschedule=opt['reschedule'],
+                            cancel=opt['cancel'],
+                            service_times=service_times,
+                            geocoded=geocoded,
+                            depot_address=depot_address,
+                            valid_orders=valid_orders_display,
+                            addresses=addresses,
+                            time_matrix=time_matrix,
+                            vehicle_capacity=vehicle_capacity,
+                            window_minutes=window_minutes,
+                            van1_metrics=opt['van1_metrics'],
+                            van2_metrics=opt['van2_metrics'],
+                            show_ai_explanations=True
+                        )
+                    else:
+                        display_optimization_results(
+                            keep=opt['keep'],
+                            early=opt['early'],
+                            reschedule=opt['reschedule'],
+                            cancel=opt['cancel'],
+                            kept=opt['kept'],
+                            service_times=service_times,
+                            geocoded=geocoded,
+                            depot_address=depot_address,
+                            valid_orders=valid_orders_display,
+                            addresses=addresses,
+                            time_matrix=time_matrix,
+                            vehicle_capacity=vehicle_capacity,
+                            window_minutes=window_minutes,
+                            strategy_desc=opt['strategy'],
+                            show_ai_explanations=True
+                        )
 
                 # TAB 2: SHORTEST ROUTE (only if Cut 2 was run)
                 elif st.session_state.active_tab == 1 and 'shortest' in optimizations:
