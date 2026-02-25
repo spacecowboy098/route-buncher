@@ -44,6 +44,9 @@ Thumbs.db
 uploads/
 *.csv
 !sample_orders.csv
+
+# Distance cache (local API cost savings — do not commit)
+distance_cache.json
 Scratchpad.md
 Scratchpad.md
 Scratchpad.md
