@@ -3295,7 +3295,7 @@ Numbers in parentheses in each column header are the **day total** across all wi
                         from allocator import window_duration_minutes
                         win_duration = window_duration_minutes(win_start, win_end)
                         win_capacity = window_capacities.get(win_label, 0)
-                        kept_units = result['total_units']
+                        kept_units = result.get('total_units', sum(o.get('units', 0) for o in result.get('keep', [])))
                         route_time = result.get('route_time', 0)
                         capacity_pct = (kept_units / win_capacity * 100) if win_capacity > 0 else 0
 
@@ -3305,14 +3305,15 @@ Numbers in parentheses in each column header are the **day total** across all wi
                         moved_later_ids = {a.order.get('order_id') for a in moved_later_into_window}
                         all_received_ids = moved_early_ids | moved_later_ids
 
-                        orders_kept_stayed = sum(1 for k in result['keep'] if k.get('order_id') not in all_received_ids)
-                        orders_added_received = sum(1 for k in result['keep'] if k.get('order_id') in all_received_ids)
+                        keep_list = result.get('keep', [])
+                        orders_kept_stayed = sum(1 for k in keep_list if k.get('order_id') not in all_received_ids)
+                        orders_added_received = sum(1 for k in keep_list if k.get('order_id') in all_received_ids)
                         total_on_route = orders_kept_stayed + orders_added_received
                         efficiency = (total_on_route / (route_time / 60)) if route_time > 0 else 0
 
                         win_service_times = result.get('service_times', [])
                         total_service_time = sum(
-                            win_service_times[k['node']] for k in result['keep']
+                            win_service_times[k['node']] for k in keep_list
                             if k.get('node', 0) < len(win_service_times)
                         )
                         drive_time = max(0, route_time - total_service_time)
@@ -3320,8 +3321,8 @@ Numbers in parentheses in each column header are the **day total** across all wi
                         # Dead leg = depot→first stop + last stop→depot
                         win_time_matrix = result.get('time_matrix', [])
                         dead_leg_time = 0
-                        if result['keep'] and win_time_matrix:
-                            sorted_keep_nodes = [k['node'] for k in sorted(result['keep'], key=lambda x: x.get('sequence_index', 0))]
+                        if keep_list and win_time_matrix:
+                            sorted_keep_nodes = [k['node'] for k in sorted(keep_list, key=lambda x: x.get('sequence_index', 0))]
                             dead_leg_time = win_time_matrix[0][sorted_keep_nodes[0]] + win_time_matrix[sorted_keep_nodes[-1]][0]
 
                         _header = (
@@ -3335,8 +3336,8 @@ Numbers in parentheses in each column header are the **day total** across all wi
                         with st.expander(_header, expanded=True):
 
                             # On Route table — columns: Seq | Order ID | Customer | Address | Est Arrival | Service Time | Origin | Reason | Tag | Units | Early | Window
-                            if result['keep']:
-                                st.markdown(f"#### 🚛 On Route ({len(result['keep'])} orders)")
+                            if keep_list:
+                                st.markdown(f"#### 🚛 On Route ({len(keep_list)} orders)")
 
                                 # Build reason lookup for kept/received orders
                                 _kept_reason = {a.order.get('order_id'): a.reason for a in allocation_result.kept_in_window}
@@ -3344,7 +3345,7 @@ Numbers in parentheses in each column header are the **day total** across all wi
                                 _received_reason.update({a.order.get('order_id'): a.reason for a in moved_later_into_window})
 
                                 keep_data = []
-                                for k in sorted(result['keep'], key=lambda x: x.get("sequence_index", 0)):
+                                for k in sorted(keep_list, key=lambda x: x.get("sequence_index", 0)):
                                     order_data = create_standard_row(k)
                                     node = k.get('node', 0)
                                     service_time = win_service_times[node] if 0 < node < len(win_service_times) else 0
@@ -3455,13 +3456,15 @@ PRIORITY CUSTOMER HANDLING:
                                 if win_label in window_results:
                                     wr = window_results[win_label]
                                     capacity = window_capacities[win_label]
-                                    load_pct = (wr['total_units'] / capacity * 100) if capacity > 0 else 0
+                                    wr_units = wr.get('total_units', sum(o.get('units', 0) for o in wr.get('keep', [])))
+                                    wr_kept = wr.get('orders_kept', len(wr.get('keep', [])))
+                                    load_pct = (wr_units / capacity * 100) if capacity > 0 else 0
                                     validation_context += f"\n{win_label}:\n"
                                     validation_context += f"  - Capacity: {capacity} units\n"
-                                    validation_context += f"  - Kept on route: {wr['orders_kept']} orders, {wr['total_units']} units ({load_pct:.1f}%)\n"
-                                    validation_context += f"  - Early delivery: {len(wr['early'])} orders\n"
-                                    validation_context += f"  - Reschedule: {len(wr['reschedule'])} orders\n"
-                                    validation_context += f"  - Cancel: {len(wr['cancel'])} orders\n"
+                                    validation_context += f"  - Kept on route: {wr_kept} orders, {wr_units} units ({load_pct:.1f}%)\n"
+                                    validation_context += f"  - Early delivery: {len(wr.get('early', []))} orders\n"
+                                    validation_context += f"  - Reschedule: {len(wr.get('reschedule', []))} orders\n"
+                                    validation_context += f"  - Cancel: {len(wr.get('cancel', []))} orders\n"
 
                             validation_context += "\nOVERFLOW ORDERS:\n"
                             if allocation_result.reschedule:
