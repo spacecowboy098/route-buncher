@@ -81,6 +81,12 @@ def parse_csv(file) -> Tuple[List[Dict], int]:
     window_minutes = None
 
     for _, row in df.iterrows():
+        # Skip cancelled orders — they may have null unit counts and are not routable
+        if "orderStatus" in df.columns:
+            status = str(row["orderStatus"]).strip().lower()
+            if status == "cancelled":
+                continue
+
         # Parse early_ok as boolean
         early_col = required_columns["early_ok"]
         if pd.isna(row[early_col]) or str(row[early_col]).strip() == "":
@@ -132,7 +138,7 @@ def parse_csv(file) -> Tuple[List[Dict], int]:
             "order_id": str(row[required_columns["order_id"]]),
             "customer_name": str(row[required_columns["customer_name"]]),
             "delivery_address": str(row[required_columns["delivery_address"]]),
-            "units": int(row[required_columns["units"]]),
+            "units": int(row[required_columns["units"]]) if not pd.isna(row[required_columns["units"]]) else 23,
             "early_delivery_ok": early_delivery_ok,
             "delivery_window_start": window_start,
             "delivery_window_end": window_end
