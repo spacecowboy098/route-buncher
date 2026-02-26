@@ -4,8 +4,9 @@ Streamlit app for buncher-optimizer - Buncha Route Optimizer.
 
 import streamlit as st
 import pandas as pd
+import pytz
 from typing import List, Dict
-from datetime import datetime
+from datetime import datetime, timedelta
 from streamlit_folium import st_folium
 
 import config
@@ -14,6 +15,12 @@ import geocoder
 import optimizer
 import disposition
 import chat_assistant
+
+try:
+    import db_fetcher
+    HAS_DB_SUPPORT = True
+except ImportError:
+    HAS_DB_SUPPORT = False
 
 
 def format_time_minutes(minutes: int) -> str:
@@ -889,43 +896,189 @@ def main():
     st.sidebar.header("🚐 Buncher Workflow")
 
     # -------------------------------------------------------------------------
-    # STEP 1: Upload Orders (Always Visible)
+    # STEP 1: Load Orders (Always Visible)
     # -------------------------------------------------------------------------
-    st.sidebar.markdown("### 📤 Step 1: Upload Orders")
-    uploaded_file = st.sidebar.file_uploader(
-        "Upload CSV file",
-        type=["csv"],
-        help="Upload CSV with order data in the expected format"
+    st.sidebar.markdown("### 📤 Step 1: Load Orders")
+
+    _source_options = ["Upload CSV"]
+    if HAS_DB_SUPPORT:
+        _source_options.append("Fetch from Database")
+
+    data_source = st.sidebar.radio(
+        "Data source:",
+        _source_options,
+        key="data_source_selector",
+        horizontal=True,
     )
 
     # Initialize variables for progressive reveal
     orders = None
+    orders_loaded = False
     window_minutes = None
     depot_address = None
     location_verified = False
     mode = None
+    uploaded_file = None
 
-    # Parse CSV if uploaded
-    if uploaded_file:
+    # ------------------------------------------------------------------
+    # CSV upload path
+    # ------------------------------------------------------------------
+    if data_source == "Upload CSV":
+        uploaded_file = st.sidebar.file_uploader(
+            "Upload CSV file",
+            type=["csv"],
+            help="Upload CSV with order data in the expected format",
+        )
+
+        if uploaded_file:
+            try:
+                # Reset config when a new file is uploaded
+                current_filename = uploaded_file.name if hasattr(uploaded_file, 'name') else None
+                if current_filename and st.session_state.get('last_uploaded_filename') != current_filename:
+                    st.session_state.window_capacities_config = {}
+                    st.session_state.optimization_complete = False
+                    st.session_state.last_uploaded_filename = current_filename
+
+                orders, window_minutes = parser.parse_csv(uploaded_file)
+                orders_loaded = True
+            except Exception as e:
+                st.sidebar.error(f"❌ Error parsing CSV: {str(e)}")
+
+    # ------------------------------------------------------------------
+    # Database fetch path
+    # ------------------------------------------------------------------
+    elif data_source == "Fetch from Database":
+        from datetime import date as _date_type
+
+        # Load stores config
         try:
-            # Check if this is a new file upload - reset states if so
-            current_filename = uploaded_file.name if hasattr(uploaded_file, 'name') else None
-            if current_filename and st.session_state.get('last_uploaded_filename') != current_filename:
-                # New file uploaded - reset configuration
-                st.session_state.window_capacities_config = {}
-                st.session_state.optimization_complete = False  # Re-enable editing
-                st.session_state.last_uploaded_filename = current_filename
+            stores_config = db_fetcher.get_stores_config()
+        except ValueError as e:
+            st.sidebar.error(f"❌ Store config error: {str(e)}")
+            stores_config = []
 
-            orders, window_minutes = parser.parse_csv(uploaded_file)
-        except Exception as e:
-            st.sidebar.error(f"❌ Error parsing CSV: {str(e)}")
-            orders = None
-            window_minutes = None
+        if not stores_config:
+            st.sidebar.warning(
+                "No stores configured. Add a STORES_CONFIG JSON array to your .env file."
+            )
+        else:
+            # Timezone selector
+            _TZ_LABELS = [
+                "US/Eastern (ET)",
+                "US/Central (CT)",
+                "US/Mountain (MT)",
+                "US/Pacific (PT)",
+                "US/Arizona",
+                "US/Alaska",
+                "US/Hawaii",
+                "UTC",
+            ]
+            _TZ_MAP = {
+                "US/Eastern (ET)": "America/New_York",
+                "US/Central (CT)": "America/Chicago",
+                "US/Mountain (MT)": "America/Denver",
+                "US/Pacific (PT)": "America/Los_Angeles",
+                "US/Arizona": "America/Phoenix",
+                "US/Alaska": "America/Anchorage",
+                "US/Hawaii": "Pacific/Honolulu",
+                "UTC": "UTC",
+            }
+            _default_tz_name = config.get_default_timezone()
+            _default_tz_label = next(
+                (k for k, v in _TZ_MAP.items() if v == _default_tz_name),
+                "US/Eastern (ET)",
+            )
+            _default_tz_idx = _TZ_LABELS.index(_default_tz_label) if _default_tz_label in _TZ_LABELS else 0
+
+            selected_tz_label = st.sidebar.selectbox(
+                "Timezone:",
+                options=_TZ_LABELS,
+                index=_default_tz_idx,
+                key="delivery_timezone",
+            )
+            _selected_tz_name = _TZ_MAP[selected_tz_label]
+            st.session_state["selected_timezone"] = _selected_tz_name
+
+            # Compute today in the selected timezone
+            _tz_obj = pytz.timezone(_selected_tz_name)
+            _today_in_tz = datetime.now(_tz_obj).date()
+
+            # When timezone changes, reset the date picker to today in the new zone
+            if st.session_state.get("_prev_delivery_tz") != _selected_tz_name:
+                st.session_state["db_fetch_date"] = _today_in_tz
+                st.session_state["_prev_delivery_tz"] = _selected_tz_name
+
+            # Delivery date picker
+            fetch_date = st.sidebar.date_input(
+                "Delivery date:",
+                value=_today_in_tz,
+                key="db_fetch_date",
+            )
+
+            # Compute UTC range for the selected local date
+            # e.g. 2026-02-26 in ET (UTC-5) → [2026-02-26T05:00Z, 2026-02-27T05:00Z)
+            _fetch_start_local = _tz_obj.localize(
+                datetime(fetch_date.year, fetch_date.month, fetch_date.day)
+            )
+            _fetch_end_local = _tz_obj.localize(
+                datetime(fetch_date.year, fetch_date.month, fetch_date.day) + timedelta(days=1)
+            )
+            fetch_utc_start = _fetch_start_local.astimezone(pytz.utc)
+            fetch_utc_end = _fetch_end_local.astimezone(pytz.utc)
+    
+
+            # Build display labels: "Store Name (ID: store_id)"
+            store_id_to_label = {
+                s["id"]: f"{s['name']} (ID: {s['id']})" for s in stores_config
+            }
+
+            selected_store_id = st.sidebar.selectbox(
+                "Select store:",
+                options=[None] + list(store_id_to_label.keys()),
+                format_func=lambda x: "— select a store —" if x is None else store_id_to_label[x],
+                key="db_selected_stores",
+            )
+            selected_store_ids = [selected_store_id] if selected_store_id else []
+
+            # Fetch button
+            fetch_clicked = st.sidebar.button(
+                "Fetch Orders",
+                disabled=not selected_store_id,
+                key="db_fetch_button",
+                type="secondary",
+            )
+            print(f" fetch_date: {fetch_date}, selected_store_ids: {selected_store_ids}", _selected_tz_name)
+            if fetch_clicked and selected_store_ids:
+                with st.sidebar:
+                    with st.spinner("Fetching orders from database..."):
+                        try:
+                            fetched_orders, fetched_window = db_fetcher.fetch_orders_for_stores(
+                                selected_store_ids,
+                                utc_start=fetch_utc_start,
+                                utc_end=fetch_utc_end,
+                                tz_name=_selected_tz_name,
+                            )
+                            st.session_state.db_orders = fetched_orders
+                            st.session_state.db_window_minutes = fetched_window
+                            # Reset optimization state on fresh fetch
+                            st.session_state.window_capacities_config = {}
+                            st.session_state.optimization_complete = False
+                            st.sidebar.success(f"✅ Fetched {len(fetched_orders)} orders")
+                        except Exception as e:
+                            st.sidebar.error(f"❌ Database error: {str(e)}")
+                            st.session_state.db_orders = None
+
+            # Use cached DB orders across reruns
+            if st.session_state.get("db_orders"):
+                orders = st.session_state.db_orders
+                window_minutes = st.session_state.db_window_minutes
+                orders_loaded = True
+                st.sidebar.info(f"ℹ️ {len(orders)} orders loaded from database")
 
     # -------------------------------------------------------------------------
-    # STEP 2: Verify Location (Hidden Until CSV Uploaded)
+    # STEP 2: Verify Location (Hidden Until Orders Loaded)
     # -------------------------------------------------------------------------
-    if uploaded_file and orders:
+    if orders_loaded and orders:
         st.sidebar.markdown("---")
         st.sidebar.markdown("### 📍 Step 2: Verify Location")
 
@@ -1126,12 +1279,12 @@ def main():
         st.sidebar.info("ℹ️ **AI Disabled** (No API key)")
 
     # Check if all requirements met
-    can_run = bool(uploaded_file and orders and location_verified and mode)
+    can_run = bool(orders_loaded and orders and location_verified and mode)
 
     if not can_run:
         # Show specific blocking reason
-        if not uploaded_file:
-            helper_text = "⚠️ Upload a CSV to continue"
+        if not orders_loaded:
+            helper_text = "⚠️ Upload a CSV or fetch from database to continue"
         elif not orders:
             helper_text = "⚠️ Error parsing CSV"
         elif not location_verified:
@@ -1279,7 +1432,7 @@ def main():
 
                 # Generate CSV content (new format)
                 import uuid
-                from datetime import date, timedelta
+                from datetime import date
 
                 csv_content = "orderId,runId,externalOrderId,orderStatus,customerID,customerTag,address,deliveryDate,deliveryWindow,earlyEligible,priorRescheduleCount,numberOfUnits,fulfillmentLocation,fulfillmentGeo,fulfillmentLocationAddress,extendedCutOffTime\n"
 
@@ -1317,8 +1470,10 @@ def main():
                     zip_code = random.choice(zip_bases) + random.randint(0, 20)
                     delivery_address = f"{street_num} {street} {zip_code} {city}"
 
-                    # Delivery date (today)
-                    delivery_date = date.today().strftime("%B %d, %Y")
+                    # Delivery date (today in selected timezone)
+                    _sample_tz_name = st.session_state.get("selected_timezone", config.get_default_timezone())
+                    _sample_tz = pytz.timezone(_sample_tz_name)
+                    delivery_date = datetime.now(_sample_tz).strftime("%B %d, %Y")
 
                     # Delivery window (combined format)
                     window_start = "09:00 AM"
@@ -1356,10 +1511,15 @@ def main():
                 st.rerun()
 
     # Use random sample if generated
-    if st.session_state.get('use_random_sample', False) and uploaded_file is None:
+    if st.session_state.get('use_random_sample', False) and not orders_loaded:
         from io import BytesIO
         uploaded_file = BytesIO(st.session_state.sample_file_content)
         uploaded_file.name = "random_sample.csv"
+        try:
+            orders, window_minutes = parser.parse_csv(uploaded_file)
+            orders_loaded = True
+        except Exception:
+            pass
 
     # AI Chat Assistant in sidebar (appears after optimization)
     if "optimization_results" in st.session_state and st.session_state.optimization_results:
@@ -1411,8 +1571,8 @@ def main():
     # MAIN WINDOW: Display Sample Data or Results
     # ============================================================================
 
-    # BEFORE CSV UPLOAD: Show sample data and template
-    if not uploaded_file:
+    # BEFORE orders loaded: Show sample data and template
+    if not orders_loaded:
         st.markdown("Upload a CSV file in the sidebar to begin optimizing delivery routes.")
 
         st.markdown("---")
@@ -1462,7 +1622,7 @@ def main():
         st.info("💡 This exporter generates CSV files in the correct format for bulk upload.")
 
     # AFTER CSV UPLOAD: Show order preview and results
-    elif uploaded_file and orders:
+    elif orders_loaded and orders:
         # Show upload summary
         st.success(f"✅ Loaded {len(orders)} orders with {window_minutes}-minute delivery window")
 
@@ -1488,7 +1648,12 @@ def main():
                         "address": o["delivery_address"],
                         "numberOfUnits": o["units"],
                         "earlyEligible": "true" if o["early_delivery_ok"] else "false",
-                        "deliveryWindow": f"{o['delivery_window_start'].strftime('%I:%M %p')} {o['delivery_window_end'].strftime('%I:%M %p')}"
+                        "deliveryWindow": (
+                            f"{o['delivery_window_start'].strftime('%I:%M %p')} {o['delivery_window_end'].strftime('%I:%M %p')}"
+                            if o.get("delivery_window_start") and o.get("delivery_window_end")
+                            and hasattr(o["delivery_window_start"], "strftime")
+                            else ""
+                        )
                     }
 
                     # Add optional fields if present
@@ -1526,7 +1691,12 @@ def main():
                         "address": o["delivery_address"],
                         "numberOfUnits": o["units"],
                         "earlyEligible": "true" if o["early_delivery_ok"] else "false",
-                        "deliveryWindow": f"{o['delivery_window_start'].strftime('%I:%M %p')} {o['delivery_window_end'].strftime('%I:%M %p')}"
+                        "deliveryWindow": (
+                            f"{o['delivery_window_start'].strftime('%I:%M %p')} {o['delivery_window_end'].strftime('%I:%M %p')}"
+                            if o.get("delivery_window_start") and o.get("delivery_window_end")
+                            and hasattr(o["delivery_window_start"], "strftime")
+                            else ""
+                        )
                     }
 
                     # Add ALL optional fields if present (to show complete imported data)
@@ -1568,7 +1738,6 @@ def main():
             # Capacity Configuration - Collapsible like Order Preview
             optimization_complete = st.session_state.get('optimization_complete', False)
 
-            from datetime import datetime, time as dt_time
             capacity_data = []
             window_times_map = {}  # Store original window times for matching orders later
 

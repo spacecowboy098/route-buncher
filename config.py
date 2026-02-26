@@ -196,6 +196,29 @@ def is_test_mode() -> bool:
     return test_mode.lower() in ["true", "1", "yes", "on"]
 
 
+def get_db_url(db_num: int) -> str:
+    """
+    Retrieve the PostgreSQL connection URL for the specified database number.
+
+    Args:
+        db_num: Database number (1 or 2)
+
+    Returns:
+        str: Database connection URL, or empty string if not configured
+    """
+    return get_secret(f"DB_{db_num}_URL", "")
+
+
+def get_default_timezone() -> str:
+    """
+    Get the default timezone for date calculations.
+
+    Returns:
+        str: IANA timezone name (e.g., "America/New_York")
+    """
+    return get_secret("DEFAULT_TIMEZONE", "America/New_York")
+
+
 def is_ai_enabled() -> bool:
     """
     Check if AI features should be enabled.
