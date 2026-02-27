@@ -9,11 +9,78 @@ from datetime import datetime
 from streamlit_folium import st_folium
 
 import config
+import db
 import parser
 import geocoder
 import optimizer
 import disposition
 import chat_assistant
+
+
+def show_db_loading(store_name: str = ""):
+    """
+    Render an engineering-style full-width loading card in the main content area.
+    Called while a PostgreSQL query is in flight.
+    """
+    subtitle = f"Loading <span style='color:#38bdf8'>{store_name}</span> orders&hellip;" if store_name else "Fetching orders from database&hellip;"
+    st.markdown(f"""
+    <style>
+    @keyframes buncher-slide {{
+        0%   {{ background-position: 200% 0; }}
+        100% {{ background-position: -200% 0; }}
+    }}
+    @keyframes buncher-pulse {{
+        0%, 100% {{ opacity: 0.25; transform: scale(0.75); }}
+        50%       {{ opacity: 1;    transform: scale(1);    }}
+    }}
+    @keyframes buncher-float {{
+        0%, 100% {{ transform: translateY(0px);  }}
+        50%       {{ transform: translateY(-8px); }}
+    }}
+    </style>
+    <div style="
+        display: flex; flex-direction: column; align-items: center;
+        justify-content: center; padding: 80px 24px;
+        background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 50%, #0f172a 100%);
+        border-radius: 16px; margin: 24px 0; border: 1px solid #1e40af;
+        box-shadow: 0 0 40px rgba(56,189,248,0.08);
+    ">
+        <div style="font-size: 72px; animation: buncher-float 2s ease-in-out infinite; margin-bottom: 20px;">🚚</div>
+        <h1 style="color:#f1f5f9; font-size:28px; letter-spacing:6px; margin:0 0 6px;
+                   font-family:'Courier New',monospace; font-weight:700;">THE BUNCHER</h1>
+        <p style="color:#475569; font-size:11px; letter-spacing:4px; margin:0 0 28px;
+                  font-family:'Courier New',monospace; text-transform:uppercase;">
+            Route Optimization Engine
+        </p>
+        <p style="color:#94a3b8; font-size:15px; margin:0 0 36px;
+                  font-family:'Courier New',monospace;">
+            {subtitle}
+        </p>
+        <div style="
+            width:360px; background:#1e293b; border:1px solid #334155;
+            border-radius:6px; overflow:hidden; margin-bottom:24px;
+        ">
+            <div style="
+                height:4px;
+                background: linear-gradient(90deg, #38bdf8, #818cf8, #c084fc, #38bdf8);
+                background-size: 200% 100%;
+                animation: buncher-slide 1.6s linear infinite;
+            "></div>
+        </div>
+        <div style="display:flex; align-items:center; gap:10px;">
+            <div style="width:9px;height:9px;background:#38bdf8;border-radius:50%;
+                        animation:buncher-pulse 1.2s ease-in-out 0s infinite;"></div>
+            <div style="width:9px;height:9px;background:#818cf8;border-radius:50%;
+                        animation:buncher-pulse 1.2s ease-in-out 0.3s infinite;"></div>
+            <div style="width:9px;height:9px;background:#c084fc;border-radius:50%;
+                        animation:buncher-pulse 1.2s ease-in-out 0.6s infinite;"></div>
+            <span style="color:#475569;font-size:12px;letter-spacing:3px;
+                         font-family:'Courier New',monospace;margin-left:6px;">
+                FETCHING DATA
+            </span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
 
 def format_time_minutes(minutes: int) -> str:
@@ -889,14 +956,9 @@ def main():
     st.sidebar.header("🚐 Buncher Workflow")
 
     # -------------------------------------------------------------------------
-    # STEP 1: Upload Orders (Always Visible)
+    # STEP 1: Select Store (fetches orders from PostgreSQL)
     # -------------------------------------------------------------------------
-    st.sidebar.markdown("### 📤 Step 1: Upload Orders")
-    uploaded_file = st.sidebar.file_uploader(
-        "Upload CSV file",
-        type=["csv"],
-        help="Upload CSV with order data in the expected format"
-    )
+    st.sidebar.markdown("### 🏪 Step 1: Select Store")
 
     # Initialize variables for progressive reveal
     orders = None
@@ -904,23 +966,57 @@ def main():
     depot_address = None
     location_verified = False
     mode = None
+    uploaded_file = None  # sentinel: set to True once orders are loaded from DB
 
-    # Parse CSV if uploaded
-    if uploaded_file:
+    # Load store list once per session
+    if "db_stores" not in st.session_state:
         try:
-            # Check if this is a new file upload - reset states if so
-            current_filename = uploaded_file.name if hasattr(uploaded_file, 'name') else None
-            if current_filename and st.session_state.get('last_uploaded_filename') != current_filename:
-                # New file uploaded - reset configuration
-                st.session_state.window_capacities_config = {}
-                st.session_state.optimization_complete = False  # Re-enable editing
-                st.session_state.last_uploaded_filename = current_filename
-
-            orders, window_minutes = parser.parse_csv(uploaded_file)
+            st.session_state.db_stores = db.get_stores()
         except Exception as e:
-            st.sidebar.error(f"❌ Error parsing CSV: {str(e)}")
-            orders = None
-            window_minutes = None
+            st.session_state.db_stores = []
+            st.sidebar.error(f"❌ Database error: {str(e)}")
+
+    db_stores = st.session_state.get("db_stores", [])
+
+    if not db_stores:
+        st.sidebar.warning("⚠️ No stores found. Check DATABASE_URL in .env")
+    else:
+        store_names = [s["name"] for s in db_stores]
+        store_id_by_name = {s["name"]: s["id"] for s in db_stores}
+
+        selected_store_name = st.sidebar.selectbox(
+            "Choose a store:",
+            store_names,
+            key="store_selector",
+            help="Select the store to load orders for"
+        )
+        selected_store_id = store_id_by_name[selected_store_name]
+
+        # Detect store change → reset state and trigger reload
+        if st.session_state.get("current_store_id") != selected_store_id:
+            st.session_state.current_store_id = selected_store_id
+            st.session_state.current_store_name = selected_store_name
+            st.session_state.db_orders = None
+            st.session_state.window_capacities_config = {}
+            st.session_state.optimization_complete = False
+            st.session_state.last_uploaded_filename = None
+            st.rerun()
+
+        # Phase 1: orders not yet loaded → show loading animation, fetch, rerun
+        if st.session_state.get("db_orders") is None:
+            show_db_loading(selected_store_name)
+            try:
+                fetched = db.get_orders_for_store(selected_store_id)
+                st.session_state.db_orders = fetched
+            except Exception as e:
+                st.error(f"❌ Failed to load orders from database: {str(e)}")
+                st.session_state.db_orders = []
+            st.rerun()
+
+        # Phase 2: orders loaded → proceed normally
+        orders = st.session_state.db_orders
+        window_minutes = None  # derived per-window downstream
+        uploaded_file = True   # sentinel so downstream conditions behave as if a file was uploaded
 
     # -------------------------------------------------------------------------
     # STEP 2: Verify Location (Hidden Until CSV Uploaded)
@@ -1464,7 +1560,8 @@ def main():
     # AFTER CSV UPLOAD: Show order preview and results
     elif uploaded_file and orders:
         # Show upload summary
-        st.success(f"✅ Loaded {len(orders)} orders with {window_minutes}-minute delivery window")
+        store_label = st.session_state.get("current_store_name", "database")
+        st.success(f"✅ Loaded {len(orders)} orders from {store_label}")
 
         # Validate orders
         valid_orders, errors = parser.validate_orders(orders)

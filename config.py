@@ -196,6 +196,40 @@ def is_test_mode() -> bool:
     return test_mode.lower() in ["true", "1", "yes", "on"]
 
 
+def get_database_url() -> str:
+    """
+    Retrieve the PostgreSQL connection URL from Streamlit secrets or environment variables.
+
+    Returns:
+        str: PostgreSQL connection URL
+
+    Raises:
+        ValueError: If DATABASE_URL is not set
+    """
+    url = get_secret("DATABASE_URL")
+    if not url:
+        raise ValueError(
+            "DATABASE_URL not found. "
+            "Please set it in .env file (local) or Streamlit secrets (cloud). "
+            "Format: postgresql://user:password@host:port/dbname"
+        )
+    return url
+
+
+def is_db_enabled() -> bool:
+    """
+    Check if a PostgreSQL database connection is configured.
+
+    Returns:
+        bool: True if DATABASE_URL is set, False otherwise
+    """
+    try:
+        get_database_url()
+        return True
+    except ValueError:
+        return False
+
+
 def is_ai_enabled() -> bool:
     """
     Check if AI features should be enabled.

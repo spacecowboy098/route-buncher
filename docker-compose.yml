@@ -1,0 +1,11 @@
+services:
+  route-buncher:
+    build: .
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+      - /app/__pycache__
+    restart: unless-stopped
