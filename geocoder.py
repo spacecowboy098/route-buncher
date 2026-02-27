@@ -188,6 +188,82 @@ def _mock_get_route_polylines(addresses: List[str], waypoint_order: List[int]) -
 
 
 # ============================================================================
+# DB-COORDINATE HELPERS (bypass Google Maps API when lat/lng come from DB)
+# ============================================================================
+
+def build_geocoded_from_db_orders(
+    depot_address: str,
+    orders: List[Dict],
+    depot_lat: Optional[float],
+    depot_lng: Optional[float],
+) -> Optional[List[Dict]]:
+    """
+    Build a geocoded list from pre-fetched DB coordinates (skips Geocoding API).
+
+    Returns None if any coordinate is missing so the caller can fall back to
+    the Google Maps Geocoding API.
+
+    Args:
+        depot_address: Depot address string (used as the 'address' label only)
+        orders: List of order dicts, each expected to have 'delivery_address',
+                'lat', and 'lng' fields populated from the DB.
+        depot_lat: Depot latitude fetched from the store table.
+        depot_lng: Depot longitude fetched from the store table.
+
+    Returns:
+        List of {"address", "lat", "lng"} dicts (index 0 = depot), or None if
+        any coordinate is missing.
+    """
+    if depot_lat is None or depot_lng is None:
+        return None
+
+    geocoded = [{"address": depot_address, "lat": depot_lat, "lng": depot_lng}]
+    for order in orders:
+        lat = order.get("lat")
+        lng = order.get("lng")
+        if lat is None or lng is None:
+            return None
+        geocoded.append({"address": order["delivery_address"], "lat": lat, "lng": lng})
+
+    return geocoded
+
+
+def build_time_matrix_from_coords(geocoded: List[Dict]) -> List[List[int]]:
+    """
+    Build a time matrix using Haversine distances from pre-fetched coordinates.
+
+    Uses the same speed estimate as mock mode (30 km/h average) but with real
+    DB coordinates, completely avoiding the Distance Matrix API.
+
+    Args:
+        geocoded: List of {"address", "lat", "lng"} dicts (index 0 = depot).
+
+    Returns:
+        N x N matrix of estimated travel times in minutes. Diagonal is 0.
+    """
+    n = len(geocoded)
+    time_matrix = [[0] * n for _ in range(n)]
+
+    for i in range(n):
+        for j in range(n):
+            if i == j:
+                continue
+            lat1 = geocoded[i].get("lat")
+            lng1 = geocoded[i].get("lng")
+            lat2 = geocoded[j].get("lat")
+            lng2 = geocoded[j].get("lng")
+
+            if any(v is None for v in [lat1, lng1, lat2, lng2]):
+                time_matrix[i][j] = 9999
+                continue
+
+            dist_km = _calculate_distance(lat1, lng1, lat2, lng2)
+            time_matrix[i][j] = max(1, int(dist_km / 30.0 * 60))
+
+    return time_matrix
+
+
+# ============================================================================
 # CACHE HELPERS
 # ============================================================================
 

@@ -1659,7 +1659,8 @@ def main():
                     # Add optional fields if present
                     optional_fields = ["orderId", "runId", "orderStatus", "customerTag",
                                      "deliveryDate", "priorRescheduleCount", "fulfillmentLocation",
-                                     "fulfillmentGeo", "fulfillmentLocationAddress", "extendedCutOffTime"]
+                                     "fulfillmentGeo", "fulfillmentLocationAddress", "extendedCutOffTime",
+                                     "lat", "lng", "depot_lat", "depot_lng"]
 
                     for field in optional_fields:
                         if field in o and o[field] is not None:
@@ -1702,7 +1703,8 @@ def main():
                     # Add ALL optional fields if present (to show complete imported data)
                     optional_fields = ["orderId", "runId", "orderStatus", "customerTag",
                                      "deliveryDate", "priorRescheduleCount", "fulfillmentLocation",
-                                     "fulfillmentGeo", "fulfillmentLocationAddress", "extendedCutOffTime"]
+                                     "fulfillmentGeo", "fulfillmentLocationAddress", "extendedCutOffTime",
+                                     "lat", "lng", "depot_lat", "depot_lng"]
 
                     for field in optional_fields:
                         if field in o and o[field] is not None:
@@ -1919,9 +1921,16 @@ def main():
                         update_progress(5, "Preparing addresses...")
                         addresses = [depot_address] + [o["delivery_address"] for o in orders_to_optimize]
 
-                        # Geocode and build time matrix
-                        update_progress(10, "Geocoding addresses...")
-                        geocoded = geocoder.geocode_addresses(addresses)
+                        # Use pre-fetched DB lat/lng when available (skips Google Maps API)
+                        update_progress(10, "Preparing coordinates...")
+                        depot_lat = orders_to_optimize[0].get("depot_lat") if orders_to_optimize else None
+                        depot_lng = orders_to_optimize[0].get("depot_lng") if orders_to_optimize else None
+                        geocoded = geocoder.build_geocoded_from_db_orders(depot_address, orders_to_optimize, depot_lat, depot_lng)
+                        using_db_coords = geocoded is not None
+
+                        if not using_db_coords:
+                            update_progress(10, "Geocoding addresses...")
+                            geocoded = geocoder.geocode_addresses(addresses)
 
                         # Check for geocoding failures
                         failed_geocodes = [g for g in geocoded if g["lat"] is None]
@@ -1931,7 +1940,10 @@ def main():
                                 st.write(f"- {g['address']}")
 
                         update_progress(25, "Building distance matrix...")
-                        time_matrix = geocoder.build_time_matrix(addresses, geocoded=geocoded)
+                        if using_db_coords:
+                            time_matrix = geocoder.build_time_matrix_from_coords(geocoded)
+                        else:
+                            time_matrix = geocoder.build_time_matrix(addresses, geocoded=geocoded)
 
                         # Build demands array: depot has 0 demand
                         update_progress(30, "Preparing optimization data...")
@@ -2573,11 +2585,16 @@ def main():
                         # Build addresses for this window
                         win_addresses = [depot_address] + [o["delivery_address"] for o in win_orders]
 
-                        # Geocode
-                        win_geocoded = geocoder.geocode_addresses(win_addresses)
+                        # Use pre-fetched DB lat/lng when available (skips Google Maps API)
+                        win_depot_lat = win_orders[0].get("depot_lat") if win_orders else None
+                        win_depot_lng = win_orders[0].get("depot_lng") if win_orders else None
+                        win_geocoded = geocoder.build_geocoded_from_db_orders(depot_address, win_orders, win_depot_lat, win_depot_lng)
 
-                        # Build time matrix
-                        win_time_matrix = geocoder.build_time_matrix(win_addresses, geocoded=win_geocoded)
+                        if win_geocoded is not None:
+                            win_time_matrix = geocoder.build_time_matrix_from_coords(win_geocoded)
+                        else:
+                            win_geocoded = geocoder.geocode_addresses(win_addresses)
+                            win_time_matrix = geocoder.build_time_matrix(win_addresses, geocoded=win_geocoded)
 
                         # Build demands
                         win_demands = [0] + [o["units"] for o in win_orders]

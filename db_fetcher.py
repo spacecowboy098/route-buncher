@@ -92,6 +92,107 @@ def get_stores_config() -> List[Dict]:
     return stores
 
 
+def _query_timeslots(cur, store_ids: List[str], utc_start: datetime, utc_end: datetime) -> List[Dict]:
+    """Fetch active run timeslots for the given stores and UTC date range (DB1)."""
+    placeholders = ", ".join(["%s"] * len(store_ids))
+    cur.execute(
+        f"""
+        SELECT
+            r.id,
+            r."deliveryDate",
+            r."storeId",
+            s."address",
+            s.name AS "storeName",
+            r."extendedCutOffTime",
+            r."dropOffStartTime" AS "delivery_window_start",
+            r."dropOffEndTime"   AS "delivery_window_end",
+            ST_Y(s.location)    AS "storeLat",
+            ST_X(s.location)    AS "storeLon"
+        FROM "runs" r
+        JOIN stores s ON r."storeId" = s.id
+        WHERE r."deliveryDate" >= %s
+          AND r."deliveryDate" <  %s
+          AND r."storeId" IN ({placeholders})
+          AND r."runStatus" IN ('notStarted', 'atLocation')
+        """,
+        (utc_start, utc_end) + tuple(store_ids),
+    )
+    return cur.fetchall()
+
+
+def _query_orders(meijer_cur, timeslot_ids: List[str]) -> List[Dict]:
+    """Fetch non-cancelled orders for the given timeslot IDs (DB2)."""
+    placeholders = ", ".join(["%s"] * len(timeslot_ids))
+    meijer_cur.execute(
+        f"""
+        SELECT
+            o.id                                                          AS "orderId",
+            o."externalOrderId",
+            o."timeSlotId",
+            o."status"                                                    AS "orderStatus",
+            uoi."customerTag",
+            CONCAT_WS(' ', da.line1, da.city, da.state, da.zip)          AS "customerAddress",
+            da."addressId",
+            o."preferEarlyDelivery"                                       AS "earlyEligible",
+            uoi."organizationId"                                          AS "customerID",
+            COALESCE((o."extraInfo" -> 'reschedule' ->> 'count')::integer, 0) AS "priorRescheduleCount"
+        FROM "order" o
+        JOIN "delivery_address" da       ON da."id" = o."deliveryAddressId"
+        JOIN "user_organization_info" uoi ON uoi."id" = o."userOrganizationInfoId"
+        WHERE o."timeSlotId" IN ({placeholders})
+          AND o."status" != 'cancelled'
+        ORDER BY o."createdAt" DESC
+        """,
+        timeslot_ids,
+    )
+    return meijer_cur.fetchall()
+
+
+def _query_quantity_map(meijer_cur, order_ids: List) -> Dict[str, int]:
+    """Return a map of orderId → total active units (DB2)."""
+    meijer_cur.execute(
+        """
+        SELECT di."orderId", SUM(di.quantity) AS "totalQuantity"
+        FROM delivery_item di
+        WHERE di.active = true
+          AND di."orderId" = ANY(%s::uuid[])
+        GROUP BY di."orderId"
+        """,
+        (order_ids,),
+    )
+    return {str(row["orderId"]): row["totalQuantity"] for row in meijer_cur.fetchall()}
+
+
+def _query_store_map(meijer_cur, store_ids: List[str]) -> Dict[str, Dict]:
+    """Return a map of bunchaStoreId → store row (DB2)."""
+    meijer_cur.execute(
+        'SELECT * FROM stores s WHERE s."bunchaStoreId" = ANY(%s)',
+        (store_ids,),
+    )
+    return {str(row["bunchaStoreId"]): row for row in meijer_cur.fetchall()}
+
+
+def _query_address_geo_map(cur, address_ids: List[int]) -> Dict[str, Dict]:
+    """Return a map of addressId → {lat, lng} from external_addresses (DB1)."""
+    if not address_ids:
+        return {}
+    cur.execute(
+        """
+        SELECT id, ST_Y(location) AS lat, ST_X(location) AS lng
+        FROM external_addresses
+        WHERE id = ANY(%s)
+        """,
+        (address_ids,),
+    )
+    return {
+        str(row["id"]): {
+            "lat": float(row["lat"]) if row["lat"] is not None else None,
+            "lng": float(row["lng"]) if row["lng"] is not None else None,
+        }
+        for row in cur.fetchall()
+    }
+
+
 def fetch_orders_for_stores(
     store_ids: List[str],
     utc_start: Optional[datetime] = None,
@@ -99,116 +200,59 @@ def fetch_orders_for_stores(
     tz_name: str = "UTC",
 ) -> Tuple[List[Dict], Optional[int]]:
     """
-    Fetch orders from PostgreSQL for the selected stores and delivery date.
-
-    Flow:
-      1. Load stores config and match the requested store IDs
-      2. Group selected stores by database number
-      3. For each database:
-         a. Query the runs table to find timeslotIds matching the delivery date + store filter
-         b. Query the orders table for all orders linked to those timeslotIds
-      4. Map each row to the standard order dict format (same as parser.parse_csv output)
+    Fetch orders from PostgreSQL for the selected stores and delivery date range.
 
     Args:
-        store_ids: List of store IDs to fetch (must match ids in STORES_CONFIG)
-        delivery_date: Delivery date to filter runs by
+        store_ids:  List of store IDs to fetch (must match ids in STORES_CONFIG)
+        utc_start:  Start of the delivery window in UTC (inclusive)
+        utc_end:    End of the delivery window in UTC (exclusive)
+        tz_name:    Timezone name for localising display strings
 
     Returns:
         Tuple of (orders, window_minutes) matching the format of parser.parse_csv()
 
     Raises:
-        ValueError: If store config is invalid or no matching stores found
-        Exception: If database connection or query fails
+        ValueError: If utc_start / utc_end are missing
+        Exception:  If a database connection or query fails
     """
-    all_orders: List[Dict] = []
-    window_minutes: Optional[int] = None
     if utc_start is None or utc_end is None:
         raise ValueError("utc_start and utc_end must be provided for fetch_orders_for_stores")
 
     runerra_conn = get_db_connection(1)
     meijer_conn = get_db_connection(2)
     try:
-        with runerra_conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur, \
-             meijer_conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as meijer_cur:
-
-            placeholders = ", ".join(["%s"] * len(store_ids))
-            runs_query = (
-                f"SELECT r.id, r.\"deliveryDate\", r.\"storeId\", s.\"address\", s.name as \"storeName\", r.\"extendedCutOffTime\", "
-                f" r.\"dropOffStartTime\" AS \"delivery_window_start\", r.\"dropOffEndTime\" AS \"delivery_window_end\" "
-                f"FROM \"runs\" r "
-                f"JOIN stores s ON r.\"storeId\" = s.id "
-                f"WHERE r.\"deliveryDate\" >= %s "
-                f"AND r.\"deliveryDate\" < %s "
-                f"AND r.\"storeId\" IN ({placeholders}) "
-                f"AND r.\"runStatus\" IN ('notStarted', 'atLocation')"
-            )
-            cur.execute(runs_query, (utc_start, utc_end) + tuple(store_ids))
-            # print(cur.mogrify(runs_query, (utc_start, utc_end) + tuple(store_ids)).decode())
-            timeslot_rows = cur.fetchall()
+        with (
+            runerra_conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur,
+            meijer_conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as meijer_cur,
+        ):
+            # 1. Timeslots (runs + store geo) — DB1
+            timeslot_rows = _query_timeslots(cur, store_ids, utc_start, utc_end)
             if not timeslot_rows:
                 return [], None
             timeslot_map = {str(row["id"]): row for row in timeslot_rows}
-            timeslot_ids = [f'{row["id"]}' for row in timeslot_rows]
+            timeslot_ids = [str(row["id"]) for row in timeslot_rows]
 
-            # # Step 2: fetch orders for those timeslotIds
-            placeholders = ", ".join(["%s"] * len(timeslot_ids))
-            orders_query = f"""
-                SELECT
-                    o.id AS "orderId",
-                    o."externalOrderId",
-                    o."timeSlotId",
-                    o."status" AS "orderStatus",
-                    uoi."customerTag",
-                    CONCAT_WS(' ', da.line1, da.city, da.state, da.zip) AS "customerAddress",
-                    da."addressId",
-                    o."preferEarlyDelivery" AS "earlyEligible",
-                    uoi."organizationId" AS "customerID",
-                    COALESCE((o."extraInfo" -> 'reschedule' ->> 'count')::integer, 0) 
-                        AS "priorRescheduleCount"
-                FROM "order" o
-                JOIN "delivery_address" da
-                    ON da."id" = o."deliveryAddressId"
-                JOIN "user_organization_info" uoi
-                    ON uoi."id" = o."userOrganizationInfoId"
-                WHERE o."timeSlotId" IN ({placeholders})
-                AND o."status" != 'cancelled'
-                ORDER BY o."createdAt" DESC
-            """
-            meijer_cur.execute(orders_query, timeslot_ids)
-            orders = meijer_cur.fetchall()
-            
-            order_ids = [row["orderId"] for row in orders]
-            query = """
-                SELECT 
-                    di."orderId",
-                    SUM(di.quantity) AS "totalQuantity"
-                FROM delivery_item di
-                WHERE di.active = true
-                AND di."orderId" = ANY(%s::uuid[])
-                GROUP BY di."orderId"
-            """
+            # 2. Orders — DB2
+            order_rows = _query_orders(meijer_cur, timeslot_ids)
+            order_ids = [row["orderId"] for row in order_rows]
 
-            meijer_cur.execute(query, (order_ids,))
-            quantities = meijer_cur.fetchall()
-            quantity_map = {str(row["orderId"]): row["totalQuantity"] for row in quantities}            
-            query = """
-                SELECT *
-                FROM stores s
-                WHERE s."bunchaStoreId" = ANY(%s)
-            """
-            meijer_cur.execute(query, (store_ids,))
-            stores = meijer_cur.fetchall()
-            store_map = {str(row["bunchaStoreId"]): row for row in stores}
-            for row in orders:
-                order, order_window = _map_row_to_order(dict(row), store_map, quantity_map, timeslot_map, tz_name)
-                print(f"Mapping orderId {row['orderId']} with timeslotId {row['timeSlotId']} resulted in order: {order}")
+            # 3. Quantities, store info, customer geo — DB2 / DB1
+            quantity_map    = _query_quantity_map(meijer_cur, order_ids)
+            store_map       = _query_store_map(meijer_cur, store_ids)
+            address_ids     = [int(row["addressId"]) for row in order_rows if row.get("addressId") is not None]
+            address_geo_map = _query_address_geo_map(cur, address_ids)
+
+            # 4. Map rows → standard order dicts
+            all_orders: List[Dict] = []
+            window_minutes: Optional[int] = None
+            for row in order_rows:
+                order, order_window = _map_row_to_order(
+                    dict(row), store_map, quantity_map, timeslot_map, tz_name, address_geo_map
+                )
                 if order is None:
                     continue
-                print(f"Fetched order {order['order_id']} with window {order_window} minutes")
-                # Use the window duration from the first valid order
                 if window_minutes is None and order_window is not None:
                     window_minutes = order_window
-
                 all_orders.append(order)
     finally:
         runerra_conn.close()
@@ -247,7 +291,7 @@ def _to_tz_str(val, tz_name: str, fmt: str) -> str:
     return str(val)
 
 
-def _map_row_to_order(row: Dict, store_map: Dict, quantity_map: Dict, timeslot_map: Dict, tz_name: str = "UTC") -> Tuple[Optional[Dict], Optional[int]]:
+def _map_row_to_order(row: Dict, store_map: Dict, quantity_map: Dict, timeslot_map: Dict, tz_name: str = "UTC", address_geo_map: Optional[Dict] = None) -> Tuple[Optional[Dict], Optional[int]]:
     """
     Map a database row (new CSV-format columns) to the standard order dict.
 
@@ -275,37 +319,13 @@ def _map_row_to_order(row: Dict, store_map: Dict, quantity_map: Dict, timeslot_m
         early_str = str(early_raw).strip().lower()
         early_delivery_ok = early_str in ["yes", "y", "true", "1"]
 
-    # Parse deliveryWindow (e.g. "09:00 AM 11:00 AM")
-    window_str = str(row.get("deliveryWindow", "")).strip()
-    window_parts = window_str.split()
-
     window_start = None
     window_end = None
-    print(window_parts)
-
-    # if len(window_parts) == 4:
-    #     # Format: "HH:MM AM HH:MM PM"
-    #     try:
-    #         window_start = datetime.strptime(f"{window_parts[0]} {window_parts[1]}", "%I:%M %p").time()
-    #         window_end = datetime.strptime(f"{window_parts[2]} {window_parts[3]}", "%I:%M %p").time()
-    #     except ValueError:
-    #         pass
-    # elif len(window_parts) == 2:
-    #     # Try 24-hour format "HH:MM HH:MM"
-    #     try:
-    #         window_start = datetime.strptime(window_parts[0], "%H:%M").time()
-    #         window_end = datetime.strptime(window_parts[1], "%H:%M").time()
-    #     except ValueError:
-    #         pass
-    # print(f"Parsed deliveryWindow '{window_str}' into start: {window_start}, end: {window_end}")    
     
     timeslot = timeslot_map.get(str(row.get("timeSlotId", "")), {})
     window_start = _to_time(timeslot.get("delivery_window_start"))
     window_end = _to_time(timeslot.get("delivery_window_end"))
-    # Build the standard order dict
-    # lat long
-    # fullfilment location
-    # time zone
+    
     order: Dict = {
         "order_id": str(row.get("externalOrderId", "")),
         "orderId": str(row.get("orderId", "")),
@@ -326,6 +346,16 @@ def _map_row_to_order(row: Dict, store_map: Dict, quantity_map: Dict, timeslot_m
         "early_delivery_ok": early_delivery_ok
     }
 
+    # Attach lat/lng from external_address table (avoids Geocoding API)
+    if address_geo_map is not None:
+        geo = address_geo_map.get(str(row.get("addressId", "")), {})
+        order["lat"] = geo.get("lat")
+        order["lng"] = geo.get("lng")
+
+    # Attach depot lat/lng — prefer store's geohash-decoded location, fall back to run row
+    order["depot_lat"] = timeslot.get("storeLat")
+    order["depot_lng"] = timeslot.get("storeLon")
+
     # Carry through optional fields (mirrors parser.py behavior)
     optional_fields = [
         "orderId", "runId", "orderStatus", "customerTag", "customerID",
@@ -344,7 +374,6 @@ def _map_row_to_order(row: Dict, store_map: Dict, quantity_map: Dict, timeslot_m
         order_window_minutes = None
 
     return order, order_window_minutes
-
 
 
 
