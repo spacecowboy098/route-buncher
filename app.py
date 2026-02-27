@@ -1940,10 +1940,7 @@ def main():
                                 st.write(f"- {g['address']}")
 
                         update_progress(25, "Building distance matrix...")
-                        if using_db_coords:
-                            time_matrix = geocoder.build_time_matrix_from_coords(geocoded)
-                        else:
-                            time_matrix = geocoder.build_time_matrix(addresses, geocoded=geocoded)
+                        time_matrix = geocoder.build_time_matrix(addresses, geocoded=geocoded)
 
                         # Build demands array: depot has 0 demand
                         update_progress(30, "Preparing optimization data...")
@@ -2590,11 +2587,9 @@ def main():
                         win_depot_lng = win_orders[0].get("depot_lng") if win_orders else None
                         win_geocoded = geocoder.build_geocoded_from_db_orders(depot_address, win_orders, win_depot_lat, win_depot_lng)
 
-                        if win_geocoded is not None:
-                            win_time_matrix = geocoder.build_time_matrix_from_coords(win_geocoded)
-                        else:
+                        if win_geocoded is None:
                             win_geocoded = geocoder.geocode_addresses(win_addresses)
-                            win_time_matrix = geocoder.build_time_matrix(win_addresses, geocoded=win_geocoded)
+                        win_time_matrix = geocoder.build_time_matrix(win_addresses, geocoded=win_geocoded)
 
                         # Build demands
                         win_demands = [0] + [o["units"] for o in win_orders]
