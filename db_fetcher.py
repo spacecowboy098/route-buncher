@@ -228,9 +228,16 @@ def fetch_orders_for_stores(
             # 1. Timeslots (runs + store geo) — DB1
             timeslot_rows = _query_timeslots(cur, store_ids, utc_start, utc_end)
             if not timeslot_rows:
-                return [], None
+                return [], None, []
             timeslot_map = {str(row["id"]): row for row in timeslot_rows}
             timeslot_ids = [str(row["id"]) for row in timeslot_rows]
+
+            # Collect all timeslot windows (including those with no orders)
+            all_timeslot_windows = [
+                (_to_time(row["delivery_window_start"]), _to_time(row["delivery_window_end"]))
+                for row in timeslot_rows
+                if row.get("delivery_window_start") and row.get("delivery_window_end")
+            ]
 
             # 2. Orders — DB2
             order_rows = _query_orders(meijer_cur, timeslot_ids)
@@ -258,7 +265,7 @@ def fetch_orders_for_stores(
         runerra_conn.close()
         meijer_conn.close()
 
-    return all_orders, window_minutes
+    return all_orders, window_minutes, all_timeslot_windows
 
 
 def _to_time(val) -> Optional[time_type]:

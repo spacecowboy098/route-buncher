@@ -1052,7 +1052,7 @@ def main():
                 with st.sidebar:
                     with st.spinner("Fetching orders from database..."):
                         try:
-                            fetched_orders, fetched_window = db_fetcher.fetch_orders_for_stores(
+                            fetched_orders, fetched_window, fetched_timeslots = db_fetcher.fetch_orders_for_stores(
                                 selected_store_ids,
                                 utc_start=fetch_utc_start,
                                 utc_end=fetch_utc_end,
@@ -1060,6 +1060,7 @@ def main():
                             )
                             st.session_state.db_orders = fetched_orders
                             st.session_state.db_window_minutes = fetched_window
+                            st.session_state.db_all_timeslots = fetched_timeslots
                             # Reset optimization state on fresh fetch
                             st.session_state.window_capacities_config = {}
                             st.session_state.optimization_complete = False
@@ -1723,12 +1724,18 @@ def main():
 
         # Multiple Windows capacity configuration (shown in main window)
         if mode == "Multiple Windows" and valid_orders:
-            # Detect unique delivery windows
+            # Detect unique delivery windows from orders
             unique_windows = set()
             for order in valid_orders:
                 window_start = order['delivery_window_start']
                 window_end = order['delivery_window_end']
-                unique_windows.add((window_start, window_end))
+                if window_start and window_end:
+                    unique_windows.add((window_start, window_end))
+
+            # Also include all DB timeslots (runs with no orders still shown)
+            for ws, we in st.session_state.get('db_all_timeslots', []):
+                if ws and we:
+                    unique_windows.add((ws, we))
 
             # Sort windows by start time
             sorted_windows = sorted(list(unique_windows), key=lambda w: w[0])
